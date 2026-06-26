@@ -1372,13 +1372,17 @@ function weekEntry(id){ return state.week.find(function(w){ return w.id===id; })
    ACTIONS
    ========================================================= */
 function setTab(t){ state.tab=t; render(); }
-function setSearch(v){ state.search=v; render(); }
+function setSearch(v){ state.search=v; refreshRecipeListArea(); }
 function toggleTagFilter(t){
   var i = state.activeTags.indexOf(t);
   if (i>-1) state.activeTags.splice(i,1); else state.activeTags.push(t);
-  render();
+  refreshRecipeListArea();
 }
-function toggleKidOnly(){ state.kidOnly = !state.kidOnly; render(); }
+function toggleKidOnly(){ state.kidOnly = !state.kidOnly; refreshRecipeListArea(); }
+function refreshRecipeListArea(){
+  var el = document.getElementById("recipe-list-area");
+  if (el) el.innerHTML = renderRecipeListArea();
+}
 
 function openRecipe(id){ state.modalRecipe = id; state.formState = null; state.importMode = false; render(); }
 function closeModal(){ state.modalRecipe = null; state.formState = null; state.importMode = false; state.importDraft = null; render(); }
@@ -1648,7 +1652,12 @@ function renderRecipesTab(){
     html += '<div style="margin:-6px 0 16px;"><button class="btn secondary" onclick="restoreHidden()">Restore '+state.hiddenIds.length+' removed recipe'+(state.hiddenIds.length===1?"":"s")+'</button></div>';
   }
 
-  html += '<div class="chip-row">';
+  html += '<div id="recipe-list-area">'+renderRecipeListArea()+'</div>';
+  return html;
+}
+
+function renderRecipeListArea(){
+  var html = '<div class="chip-row">';
   html += '<button class="chip'+(state.kidOnly?" active":"")+'" onclick="toggleKidOnly()">🧒 Kid-Friendly</button>';
   allTags().forEach(function(t){
     var active = state.activeTags.indexOf(t)>-1;
