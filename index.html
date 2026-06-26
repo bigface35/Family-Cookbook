@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>The Family Cookbook</title>
+<title>Minear Family Recipes</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Caveat:wght@500;600;700&family=Libre+Franklin:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
@@ -1018,6 +1018,8 @@ var state = {
   checks:{},          // key -> bool
   modalRecipe:null,   // id of recipe being viewed, or null
   formState:null,     // {mode:'add'|'edit', recipeId, ingRows}
+  importMode:false,   // whether the "Import a recipe" modal is open
+  importDraft:null,   // parsed {name, ingredients, steps, ...} waiting to prefill the add form
   syncStatus:"connecting" // "connecting" | "synced" | "offline" | "error"
 };
 
@@ -1124,6 +1126,226 @@ function formatAmount(n){
   return (Math.round(n*100)/100).toString();
 }
 
+/* =========================================================
+   RECIPE IMPORT — parse a recipe from a URL or pasted text
+   ========================================================= */
+var UNIT_WORDS = ["cup","cups","tbsp","tablespoon","tablespoons","tsp","teaspoon","teaspoons",
+  "oz","ounce","ounces","lb","lbs","pound","pounds","g","gram","grams","kg","kilogram","kilograms",
+  "ml","milliliter","milliliters","l","liter","liters","clove","cloves","can","cans","slice","slices",
+  "pinch","whole","stick","sticks","bunch","head","heads","jar","jars","package","packages","sprig","sprigs"];
+
+var UNICODE_FRACTIONS = {"½":0.5,"⅓":0.333,"⅔":0.667,"¼":0.25,"¾":0.75,"⅛":0.125,"⅜":0.375,"⅝":0.625,"⅞":0.875};
+
+var CATEGORY_KEYWORDS = [
+  ["Meat & Seafood",["chicken","beef","pork","turkey","sausage","bacon","steak","salmon","shrimp","fish","ham","lamb","cod","tilapia","guanciale","pancetta","ribs","brisket","meat"]],
+  ["Dairy & Eggs",["milk","cheese","butter","cream","yogurt","egg","parmesan","mozzarella","ricotta","cheddar","sour cream","ghee","pecorino"]],
+  ["Produce",["onion","garlic","carrot","celery","broccoli","tomato","potato","lemon","lime","pepper","cilantro","parsley","basil","spinach","kale","lettuce","scallion","ginger","mushroom","avocado","cabbage","cucumber","apple","banana","herb"]],
+  ["Bakery & Grains",["bread","tortilla","bun","crust","naan","baguette","croissant","roll"]],
+  ["Spices & Seasonings",["salt","pepper","cumin","paprika","oregano","thyme","cinnamon","nutmeg","chili powder","curry powder","garam masala","turmeric","bay leaf","red pepper flake","spice","seasoning"]],
+  ["Condiments & Sauces",["soy sauce","ketchup","mustard","mayo","hot sauce","worcestershire","vinegar","pesto","salsa","hoisin","sriracha","sauce"]],
+  ["Pantry & Dry Goods",["flour","sugar","rice","pasta","oil","broth","stock","beans","lentils","cornstarch","baking powder","baking soda","yeast","oats","quinoa","noodle","spaghetti","crushed tomato","diced tomato","canned tomato","stewed tomato","tomato paste","tomato sauce"]],
+  ["Frozen",["frozen"]]
+];
+function guessCategory(name){
+  var n = (name||"").toLowerCase();
+  var bestCat = null, bestLen = 0;
+  for (var i=0;i<CATEGORY_KEYWORDS.length;i++){
+    var cat = CATEGORY_KEYWORDS[i][0];
+    var words = CATEGORY_KEYWORDS[i][1];
+    for (var j=0;j<words.length;j++){
+      if (n.indexOf(words[j])>-1 && words[j].length>bestLen){
+        bestLen = words[j].length;
+        bestCat = cat;
+      }
+    }
+  }
+  return bestCat || "Other";
+}
+
+function parseFraction(str){
+  var p = str.split("/");
+  return parseFloat(p[0])/parseFloat(p[1]);
+}
+function parseQuantity(str){
+  str = str.trim();
+  if (UNICODE_FRACTIONS[str]!==undefined) return UNICODE_FRACTIONS[str];
+  if (/^\d+\s+\d+\/\d+$/.test(str)){
+    var parts = str.split(/\s+/);
+    return parseFloat(parts[0]) + parseFraction(parts[1]);
+  }
+  if (str.indexOf("/")>-1) return parseFraction(str);
+  return parseFloat(str);
+}
+function parseIngredientLine(line){
+  line = (line||"").trim();
+  if (!line) return null;
+  var original = line;
+  var amount = null;
+  var qtyMatch = line.match(/^(\d+\s+\d+\/\d+|\d+\/\d+|\d+\.\d+|\d+|[½⅓⅔¼¾⅛⅜⅝⅞])\s*/);
+  if (qtyMatch){
+    amount = parseQuantity(qtyMatch[1]);
+    if (isNaN(amount)) amount = null;
+    line = line.slice(qtyMatch[0].length);
+  }
+  var unit = null;
+  var rest = line.trim();
+  var unitMatch = rest.match(/^([a-zA-Z]+)\.?\s+/);
+  if (unitMatch){
+    var word = unitMatch[1].toLowerCase().replace(/\.$/,"");
+    if (UNIT_WORDS.indexOf(word)>-1){
+      unit = unitMatch[1];
+      rest = rest.slice(unitMatch[0].length);
+    }
+  }
+  var name = rest.trim().replace(/^,\s*/,"");
+  if (!name) name = original;
+  if (amount===null) unit = unit || "to taste";
+  else if (!unit) unit = "whole";
+  return {amount:amount, unit:unit, name:name, category:guessCategory(name)};
+}
+
+function normalizeInstructions(instr){
+  if (!instr) return [];
+  if (typeof instr === "string"){
+    return instr.split(/\n+/).map(function(s){return s.trim();}).filter(Boolean);
+  }
+  if (Array.isArray(instr)){
+    var out = [];
+    instr.forEach(function(item){
+      if (typeof item === "string") out.push(item.trim());
+      else if (item && item["@type"]==="HowToSection" && Array.isArray(item.itemListElement)){
+        item.itemListElement.forEach(function(sub){ if (sub && sub.text) out.push(String(sub.text).trim()); });
+      } else if (item && item.text) out.push(String(item.text).trim());
+    });
+    return out.filter(Boolean);
+  }
+  return [];
+}
+function parseServings(y){
+  if (!y) return null;
+  var str = Array.isArray(y) ? y[0] : y;
+  var m = String(str).match(/\d+/);
+  return m ? parseInt(m[0],10) : null;
+}
+function parseIsoTime(iso){
+  if (!iso) return "";
+  var m = String(iso).match(/PT(?:(\d+)H)?(?:(\d+)M)?/);
+  if (!m) return "";
+  var h = parseInt(m[1]||0,10), min = parseInt(m[2]||0,10);
+  if (!h && !min) return "";
+  var parts = [];
+  if (h) parts.push(h+" hr");
+  if (min) parts.push(min+" min");
+  return parts.join(" ");
+}
+
+function findRecipeJsonLdNode(node){
+  if (!node) return null;
+  if (Array.isArray(node)){
+    for (var i=0;i<node.length;i++){
+      var found = findRecipeJsonLdNode(node[i]);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof node !== "object") return null;
+  var type = node["@type"];
+  if (type==="Recipe" || (Array.isArray(type) && type.indexOf("Recipe")>-1)) return node;
+  if (node["@graph"]) return findRecipeJsonLdNode(node["@graph"]);
+  return null;
+}
+function extractRecipeJsonLd(html){
+  var doc = new DOMParser().parseFromString(html, "text/html");
+  var scripts = doc.querySelectorAll('script[type="application/ld+json"]');
+  for (var i=0;i<scripts.length;i++){
+    try{
+      var parsed = JSON.parse(scripts[i].textContent);
+      var found = findRecipeJsonLdNode(parsed);
+      if (found) return found;
+    }catch(e){ /* malformed JSON on this site, skip it */ }
+  }
+  return null;
+}
+
+async function fetchPageHtml(url){
+  var proxies = [
+    "https://api.allorigins.win/raw?url=" + encodeURIComponent(url),
+    "https://corsproxy.io/?url=" + encodeURIComponent(url)
+  ];
+  var lastErr = null;
+  for (var i=0;i<proxies.length;i++){
+    try{
+      var res = await fetch(proxies[i]);
+      if (res.ok){
+        var text = await res.text();
+        if (text && text.length>200) return text;
+      }
+    }catch(e){ lastErr = e; }
+  }
+  throw new Error("Couldn't reach that page right now.");
+}
+
+function recipeNodeToDraft(node){
+  var name = (typeof node.name==="string" && node.name) ? node.name : "Imported Recipe";
+  var ingredientsRaw = node.recipeIngredient || node.ingredients || [];
+  var ingredients = ingredientsRaw.map(parseIngredientLine).filter(Boolean);
+  var steps = normalizeInstructions(node.recipeInstructions);
+  var servings = parseServings(node.recipeYield) || 4;
+  var time = parseIsoTime(node.totalTime) || "";
+  var tags = [];
+  if (node.recipeCuisine) tags.push(String(Array.isArray(node.recipeCuisine)?node.recipeCuisine[0]:node.recipeCuisine));
+  return {name:name, ingredients:ingredients, steps:steps, servings:servings, time:time, tags:tags, kidFriendly:false};
+}
+
+async function handleUrlImport(){
+  var urlInput = document.getElementById("import-url-input");
+  var statusEl = document.getElementById("import-status");
+  var url = urlInput ? urlInput.value.trim() : "";
+  if (!url){ if (statusEl) statusEl.textContent = "Paste a recipe URL first."; return; }
+  if (statusEl) statusEl.textContent = "Fetching the page…";
+  try{
+    var html = await fetchPageHtml(url);
+    var node = extractRecipeJsonLd(html);
+    if (!node) throw new Error("Couldn't find recipe data on that page — try pasting the ingredients and steps below instead.");
+    state.importDraft = recipeNodeToDraft(node);
+    state.importMode = false;
+    state.formState = {mode:"add", recipeId:null, ingRows: state.importDraft.ingredients.length || 4};
+    render();
+  }catch(e){
+    if (statusEl) statusEl.textContent = (e && e.message) ? e.message : "Couldn't import that page automatically — try pasting it below instead.";
+  }
+}
+
+function handlePasteImport(){
+  var nameEl = document.getElementById("import-paste-name");
+  var ingEl = document.getElementById("import-paste-ingredients");
+  var stepsEl = document.getElementById("import-paste-steps");
+  var name = (nameEl && nameEl.value.trim()) || "Imported Recipe";
+  var ingLines = ingEl ? ingEl.value.split("\n").map(function(s){return s.trim();}).filter(Boolean) : [];
+  var stepLines = stepsEl ? stepsEl.value.split("\n").map(function(s){return s.trim();}).filter(Boolean) : [];
+  var ingredients = ingLines.map(parseIngredientLine).filter(Boolean);
+  if (!ingredients.length && !stepLines.length){
+    var statusEl = document.getElementById("import-status");
+    if (statusEl) statusEl.textContent = "Paste at least some ingredients or steps first.";
+    return;
+  }
+  state.importDraft = {name:name, ingredients:ingredients, steps:stepLines, servings:4, time:"", tags:[], kidFriendly:false};
+  state.importMode = false;
+  state.formState = {mode:"add", recipeId:null, ingRows: ingredients.length || 4};
+  render();
+}
+
+function openImportModal(){
+  state.importMode = true;
+  state.modalRecipe = null;
+  state.formState = null;
+  render();
+}
+function closeImportModal(){
+  state.importMode = false;
+  render();
+}
+
 function allTags(){
   var set = {};
   allRecipes().forEach(function(r){ (r.tags||[]).forEach(function(t){ set[t]=true; }); });
@@ -1158,8 +1380,8 @@ function toggleTagFilter(t){
 }
 function toggleKidOnly(){ state.kidOnly = !state.kidOnly; render(); }
 
-function openRecipe(id){ state.modalRecipe = id; state.formState = null; render(); }
-function closeModal(){ state.modalRecipe = null; state.formState = null; render(); }
+function openRecipe(id){ state.modalRecipe = id; state.formState = null; state.importMode = false; render(); }
+function closeModal(){ state.modalRecipe = null; state.formState = null; state.importMode = false; state.importDraft = null; render(); }
 
 function toggleWeek(id){
   if (inWeek(id)){
@@ -1202,6 +1424,7 @@ function clearChecks(){
 
 /* ---- Add / edit / remove recipes ---- */
 function openAddForm(){
+  state.importDraft = null;
   state.formState = {mode:"add", recipeId:null, ingRows:4};
   state.modalRecipe = null;
   render();
@@ -1209,6 +1432,7 @@ function openAddForm(){
 function openEditForm(id){
   var r = findRecipe(id);
   if (!r) return;
+  state.importDraft = null;
   state.formState = {mode:"edit", recipeId:id, ingRows:(r.ingredients||[]).length || 4};
   state.modalRecipe = null;
   render();
@@ -1291,6 +1515,7 @@ function submitRecipeForm(ev){
   }
   state.formState = null;
   state.modalRecipe = null;
+  state.importDraft = null;
   state.tab = "recipes";
   render();
 }
@@ -1373,6 +1598,8 @@ function render(){
   html += '</div>';
   if (state.formState){
     html += renderRecipeFormModal();
+  } else if (state.importMode){
+    html += renderImportModal();
   } else if (state.modalRecipe){
     html += renderRecipeModal(findRecipe(state.modalRecipe));
   }
@@ -1388,7 +1615,7 @@ function renderHero(){
     error:["Sync error — check your connection","#B6483E"]
   };
   var s = statusMap[state.syncStatus] || statusMap.connecting;
-  return '<div class="hero"><h1>The Family Cookbook</h1>'+
+  return '<div class="hero"><h1>Minear Family Recipes</h1>'+
     '<p>Pick your meals &middot; build the list &middot; go shop</p>'+
     '<p style="margin-top:8px;font-size:11px;letter-spacing:.03em;color:'+s[1]+';">● '+s[0]+'</p>'+
     '</div>';
@@ -1413,6 +1640,7 @@ function tabBtn(key,label,count){
 function renderRecipesTab(){
   var html = '<div class="toolbar">'+
     '<input class="search-input" type="text" placeholder="Search recipes…" value="'+escapeHtml(state.search)+'" oninput="setSearch(this.value)">'+
+    '<button class="btn secondary" onclick="openImportModal()">Import a recipe</button>'+
     '<button class="btn" onclick="openAddForm()">+ Add a recipe</button>'+
     '</div>';
 
@@ -1583,7 +1811,7 @@ function renderStaplesTab(){
 function renderRecipeFormModal(){
   var fs = state.formState;
   var isEdit = fs.mode==="edit";
-  var recipe = isEdit ? findRecipe(fs.recipeId) : null;
+  var recipe = isEdit ? findRecipe(fs.recipeId) : state.importDraft;
 
   var rowsHtml = "";
   if (recipe && recipe.ingredients && recipe.ingredients.length){
@@ -1600,10 +1828,14 @@ function renderRecipeFormModal(){
   var kidNoteVal = recipe && recipe.kidNote ? recipe.kidNote : "";
   var stepsVal = recipe ? (recipe.steps||[]).join("\n") : "";
 
+  var isImport = !isEdit && !!state.importDraft;
+  var heading = isEdit ? "Edit recipe" : (isImport ? "Review imported recipe" : "Add a recipe");
+  var sub = isEdit ? "Tweak it to match how you actually make it" : (isImport ? "Double-check the details, then save it to the cookbook" : "Grow your family cookbook");
+
   var html = '<div class="overlay" onclick="if(event.target===this) closeModal()"><div class="modal">'+
     '<button class="modal-close" onclick="closeModal()">×</button>'+
-    '<div class="modal-head"><h2>'+(isEdit?"Edit recipe":"Add a recipe")+'</h2>'+
-    '<div class="rcard-meta">'+(isEdit?"Tweak it to match how you actually make it":"Grow your family cookbook")+'</div></div>'+
+    '<div class="modal-head"><h2>'+heading+'</h2>'+
+    '<div class="rcard-meta">'+sub+'</div></div>'+
     '<div class="modal-body"><form id="recipe-form">'+
     '<div class="field"><label>Recipe name</label><input type="text" name="rname" value="'+escapeHtml(nameVal)+'" required></div>'+
     '<div class="field" style="display:flex;gap:12px;">'+
@@ -1618,6 +1850,32 @@ function renderRecipeFormModal(){
     '<div class="field"><label>Toddler note (optional)</label><input type="text" name="rkidnote" placeholder="e.g. Serve their portion plain" value="'+escapeHtml(kidNoteVal)+'"></div>'+
     '<div class="modal-actions"><button type="submit" class="btn">Save recipe</button><button type="button" class="btn secondary" onclick="closeModal()">Cancel</button></div>'+
     '</form></div></div></div>';
+  return html;
+}
+
+function renderImportModal(){
+  var html = '<div class="overlay" onclick="if(event.target===this) closeImportModal()"><div class="modal">'+
+    '<button class="modal-close" onclick="closeImportModal()">×</button>'+
+    '<div class="modal-head"><h2>Import a recipe</h2>'+
+    '<div class="rcard-meta">Pull one in from a recipe site, or paste it in by hand</div></div>'+
+    '<div class="modal-body">'+
+    '<div class="field"><label>Recipe URL</label>'+
+    '<div style="display:flex;gap:8px;">'+
+    '<input type="text" id="import-url-input" placeholder="https://example.com/some-recipe" style="flex:1;">'+
+    '<button type="button" class="btn" onclick="handleUrlImport()">Fetch</button>'+
+    '</div>'+
+    '<div id="import-status" style="font-size:13px;color:var(--ink-soft);margin-top:8px;min-height:16px;"></div>'+
+    '<div style="font-size:12px;color:var(--ink-soft);margin-top:6px;">Works best on sites that publish structured recipe data (most food blogs and recipe sites do). If it can\'t find anything, paste it in below.</div>'+
+    '</div>'+
+    '<div style="text-align:center;margin:20px 0 16px;color:var(--ink-soft);font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;">— or paste it in —</div>'+
+    '<div class="field"><label>Recipe name</label><input type="text" id="import-paste-name" placeholder="e.g. Grandma\'s Lasagna"></div>'+
+    '<div class="field"><label>Ingredients (one per line)</label><textarea id="import-paste-ingredients" placeholder="2 cups flour\n1 lb ground beef\n1 onion, diced" style="min-height:100px;"></textarea></div>'+
+    '<div class="field"><label>Steps (one per line)</label><textarea id="import-paste-steps" placeholder="Preheat the oven...\nBrown the beef..." style="min-height:100px;"></textarea></div>'+
+    '<div class="modal-actions">'+
+    '<button type="button" class="btn" onclick="handlePasteImport()">Continue</button>'+
+    '<button type="button" class="btn secondary" onclick="closeImportModal()">Cancel</button>'+
+    '</div>'+
+    '</div></div></div>';
   return html;
 }
 
