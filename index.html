@@ -1648,8 +1648,16 @@ function renderRecipesTab(){
     '<button class="btn" onclick="openAddForm()">+ Add a recipe</button>'+
     '</div>';
 
+  var noticeBits = [];
+  if (state.week.length){
+    noticeBits.push('<span style="font-size:13px;color:var(--ink-soft);font-weight:600;">'+state.week.length+' recipe'+(state.week.length===1?"":"s")+' selected for this week</span>'+
+      '<button class="btn danger" onclick="clearWeek()">Clear all selected</button>');
+  }
   if (state.hiddenIds.length){
-    html += '<div style="margin:-6px 0 16px;"><button class="btn secondary" onclick="restoreHidden()">Restore '+state.hiddenIds.length+' removed recipe'+(state.hiddenIds.length===1?"":"s")+'</button></div>';
+    noticeBits.push('<button class="btn secondary" onclick="restoreHidden()">Restore '+state.hiddenIds.length+' removed recipe'+(state.hiddenIds.length===1?"":"s")+'</button>');
+  }
+  if (noticeBits.length){
+    html += '<div style="margin:-6px 0 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'+noticeBits.join('')+'</div>';
   }
 
   html += '<div id="recipe-list-area">'+renderRecipeListArea()+'</div>';
