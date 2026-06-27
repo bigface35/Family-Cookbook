@@ -1130,20 +1130,26 @@ function formatAmount(n){
    RECIPE IMPORT — parse a recipe from a URL or pasted text
    ========================================================= */
 var UNIT_WORDS = ["cup","cups","tbsp","tablespoon","tablespoons","tsp","teaspoon","teaspoons",
-  "oz","ounce","ounces","lb","lbs","pound","pounds","g","gram","grams","kg","kilogram","kilograms",
-  "ml","milliliter","milliliters","l","liter","liters","clove","cloves","can","cans","slice","slices",
-  "pinch","whole","stick","sticks","bunch","head","heads","jar","jars","package","packages","sprig","sprigs"];
+  "oz","ounce","ounces","lb","lbs","pound","pounds",
+  "clove","cloves","can","cans","slice","slices",
+  "pinch","whole","stick","sticks","bunch","head","heads","jar","jars","package","packages","sprig","sprigs",
+  "large","medium","small","sheet","sheets"];
+var METRIC_WEIGHT_UNITS = ["g","gram","grams","kg","kilogram","kilograms"];
+var METRIC_VOLUME_UNITS = ["ml","milliliter","milliliters","l","liter","liters"];
+var ALL_UNIT_WORDS = UNIT_WORDS.concat(METRIC_WEIGHT_UNITS, METRIC_VOLUME_UNITS);
+var UNIT_REGEX = new RegExp("^(" + ALL_UNIT_WORDS.slice().sort(function(a,b){return b.length-a.length;}).join("|") + ")\\.?(?=\\s|$)", "i");
 
 var UNICODE_FRACTIONS = {"½":0.5,"⅓":0.333,"⅔":0.667,"¼":0.25,"¾":0.75,"⅛":0.125,"⅜":0.375,"⅝":0.625,"⅞":0.875};
+var QTY_PATTERN = "(\\d+\\s*[-–]\\s*\\d+|\\d+[½⅓⅔¼¾⅛⅜⅝⅞]|\\d+\\s+\\d+\\/\\d+|\\d+\\/\\d+|\\d+\\.\\d+|\\d+|[½⅓⅔¼¾⅛⅜⅝⅞])";
 
 var CATEGORY_KEYWORDS = [
   ["Meat & Seafood",["chicken","beef","pork","turkey","sausage","bacon","steak","salmon","shrimp","fish","ham","lamb","cod","tilapia","guanciale","pancetta","ribs","brisket","meat"]],
   ["Dairy & Eggs",["milk","cheese","butter","cream","yogurt","egg","parmesan","mozzarella","ricotta","cheddar","sour cream","ghee","pecorino"]],
   ["Produce",["onion","garlic","carrot","celery","broccoli","tomato","potato","lemon","lime","pepper","cilantro","parsley","basil","spinach","kale","lettuce","scallion","ginger","mushroom","avocado","cabbage","cucumber","apple","banana","herb"]],
-  ["Bakery & Grains",["bread","tortilla","bun","crust","naan","baguette","croissant","roll"]],
-  ["Spices & Seasonings",["salt","pepper","cumin","paprika","oregano","thyme","cinnamon","nutmeg","chili powder","curry powder","garam masala","turmeric","bay leaf","red pepper flake","spice","seasoning"]],
+  ["Bakery & Grains",["bread","tortilla","bun","crust","naan","baguette","croissant","roll","graham cracker"]],
+  ["Spices & Seasonings",["salt","pepper","cumin","paprika","oregano","thyme","cinnamon","nutmeg","chili powder","curry powder","garam masala","turmeric","bay leaf","red pepper flake","spice","seasoning","vanilla extract"]],
   ["Condiments & Sauces",["soy sauce","ketchup","mustard","mayo","hot sauce","worcestershire","vinegar","pesto","salsa","hoisin","sriracha","sauce"]],
-  ["Pantry & Dry Goods",["flour","sugar","rice","pasta","oil","broth","stock","beans","lentils","cornstarch","baking powder","baking soda","yeast","oats","quinoa","noodle","spaghetti","crushed tomato","diced tomato","canned tomato","stewed tomato","tomato paste","tomato sauce"]],
+  ["Pantry & Dry Goods",["flour","sugar","rice","pasta","oil","broth","stock","beans","lentils","cornstarch","baking powder","baking soda","yeast","oats","quinoa","noodle","spaghetti","crushed tomato","diced tomato","canned tomato","stewed tomato","tomato paste","tomato sauce","milk powder","condensed milk","powdered sugar"]],
   ["Frozen",["frozen"]]
 ];
 function guessCategory(name){
@@ -1162,6 +1168,13 @@ function guessCategory(name){
   return bestCat || "Other";
 }
 
+function unitScore(u){
+  if (!u) return 0;
+  var w = u.toLowerCase().replace(/\.$/,"");
+  if (METRIC_WEIGHT_UNITS.indexOf(w)>-1 || METRIC_VOLUME_UNITS.indexOf(w)>-1) return 1; // metric: usable, but less kitchen-friendly for most US cooks
+  if (UNIT_WORDS.indexOf(w)>-1) return 2; // cups/tbsp/lb/etc: prefer these when available
+  return 0;
+}
 function parseFraction(str){
   var p = str.split("/");
   return parseFloat(p[0])/parseFloat(p[1]);
@@ -1169,6 +1182,10 @@ function parseFraction(str){
 function parseQuantity(str){
   str = str.trim();
   if (UNICODE_FRACTIONS[str]!==undefined) return UNICODE_FRACTIONS[str];
+  var rangeMatch = str.match(/^(\d+)\s*[-–]\s*(\d+)$/);
+  if (rangeMatch) return parseFloat(rangeMatch[1]); // a range like "5-6" -> use the low end
+  var glued = str.match(/^(\d+)([½⅓⅔¼¾⅛⅜⅝⅞])$/);
+  if (glued) return parseFloat(glued[1]) + UNICODE_FRACTIONS[glued[2]]; // glued mixed number, e.g. "2½"
   if (/^\d+\s+\d+\/\d+$/.test(str)){
     var parts = str.split(/\s+/);
     return parseFloat(parts[0]) + parseFraction(parts[1]);
@@ -1176,46 +1193,102 @@ function parseQuantity(str){
   if (str.indexOf("/")>-1) return parseFraction(str);
   return parseFloat(str);
 }
+// Finds a quantity (+ optional recognized unit) at the very start of `text`.
+// Returns {amount, unit, end} where `end` is how many characters were consumed,
+// or null if no quantity was found there.
+function extractMeasure(text){
+  var qm = text.match(new RegExp("^"+QTY_PATTERN));
+  if (!qm) return null;
+  var amount = parseQuantity(qm[1]);
+  if (isNaN(amount)) return null;
+  var consumed = qm[0].length;
+  var rest = text.slice(consumed);
+  var spaceMatch = rest.match(/^\s*/)[0];
+  var afterSpace = rest.slice(spaceMatch.length);
+  var unit = null, unitLen = 0;
+  var um = afterSpace.match(UNIT_REGEX);
+  if (um){ unit = um[1]; unitLen = spaceMatch.length + um[0].length; }
+  return {amount:amount, unit:unit, end: consumed+unitLen};
+}
+// Parses one ingredient line into {amount, unit, name, category}. Handles the
+// common "metric (imperial)" or "metric / imperial" dual-measurement style some
+// sites use (e.g. "230g (2½ cups) flour" or "396 g / 14 oz can milk") by picking
+// whichever measurement is more kitchen-usable and stripping the rest from the name.
 function parseIngredientLine(line){
   line = (line||"").trim();
   if (!line) return null;
   var original = line;
-  var amount = null;
-  var qtyMatch = line.match(/^(\d+\s+\d+\/\d+|\d+\/\d+|\d+\.\d+|\d+|[½⅓⅔¼¾⅛⅜⅝⅞])\s*/);
-  if (qtyMatch){
-    amount = parseQuantity(qtyMatch[1]);
-    if (isNaN(amount)) amount = null;
-    line = line.slice(qtyMatch[0].length);
+  var removeSpans = [];
+  var candidates = [];
+
+  var lead = extractMeasure(line);
+  if (lead){
+    candidates.push({amount:lead.amount, unit:lead.unit, score:unitScore(lead.unit)});
+    removeSpans.push([0, lead.end]);
   }
-  var unit = null;
-  var rest = line.trim();
-  var unitMatch = rest.match(/^([a-zA-Z]+)\.?\s+/);
-  if (unitMatch){
-    var word = unitMatch[1].toLowerCase().replace(/\.$/,"");
-    if (UNIT_WORDS.indexOf(word)>-1){
-      unit = unitMatch[1];
-      rest = rest.slice(unitMatch[0].length);
+
+  var parenRe = /\(([^)]*)\)/g, pm;
+  while ((pm = parenRe.exec(line))){
+    var inner = extractMeasure(pm[1]);
+    if (inner){
+      candidates.push({amount:inner.amount, unit:inner.unit, score:unitScore(inner.unit)+0.5});
+      removeSpans.push([pm.index, pm.index+pm[0].length]);
     }
   }
-  var name = rest.trim().replace(/^,\s*/,"");
+
+  var slashIdx = line.indexOf("/");
+  if (slashIdx>-1 && !(lead && slashIdx<lead.end)){
+    var afterSlash = line.slice(slashIdx+1);
+    var leadSpace = afterSlash.match(/^\s*/)[0];
+    var sm = extractMeasure(afterSlash.slice(leadSpace.length));
+    if (sm){
+      candidates.push({amount:sm.amount, unit:sm.unit, score:unitScore(sm.unit)+0.5});
+      removeSpans.push([slashIdx, slashIdx+1+leadSpace.length+sm.end]);
+    }
+  }
+
+  var best = null;
+  candidates.forEach(function(c){ if (!best || c.score>best.score) best = c; });
+
+  removeSpans.sort(function(a,b){ return a[0]-b[0]; });
+  var name = "", cursor = 0;
+  removeSpans.forEach(function(span){
+    if (span[0]>cursor) name += line.slice(cursor, span[0]);
+    cursor = Math.max(cursor, span[1]);
+  });
+  name += line.slice(cursor);
+  name = name.replace(/\s+/g," ").replace(/^[,\-\/\s]+|[,\-\/\s]+$/g,"").trim();
   if (!name) name = original;
+
+  var amount = best ? best.amount : null;
+  var unit = best ? best.unit : null;
   if (amount===null) unit = unit || "to taste";
   else if (!unit) unit = "whole";
   return {amount:amount, unit:unit, name:name, category:guessCategory(name)};
+}
+// Recognizes section-divider lines some sites mix into an ingredient list
+// (e.g. "GRAHAM CRACKER CRUST") so they don't get added as a fake ingredient.
+function looksLikeSectionHeader(line){
+  var t = (line||"").trim();
+  if (!t || /\d/.test(t)) return false;
+  return t.length<50 && t===t.toUpperCase() && /[A-Z]/.test(t);
+}
+function stripStepNumbering(s){
+  return s.replace(/^\s*(?:step\s*)?\d+\s*[\.\):]\s*/i, "").trim();
 }
 
 function normalizeInstructions(instr){
   if (!instr) return [];
   if (typeof instr === "string"){
-    return instr.split(/\n+/).map(function(s){return s.trim();}).filter(Boolean);
+    return instr.split(/\n+/).map(function(s){return stripStepNumbering(s.trim());}).filter(Boolean);
   }
   if (Array.isArray(instr)){
     var out = [];
     instr.forEach(function(item){
-      if (typeof item === "string") out.push(item.trim());
+      if (typeof item === "string") out.push(stripStepNumbering(item.trim()));
       else if (item && item["@type"]==="HowToSection" && Array.isArray(item.itemListElement)){
-        item.itemListElement.forEach(function(sub){ if (sub && sub.text) out.push(String(sub.text).trim()); });
-      } else if (item && item.text) out.push(String(item.text).trim());
+        item.itemListElement.forEach(function(sub){ if (sub && sub.text) out.push(stripStepNumbering(String(sub.text).trim())); });
+      } else if (item && item.text) out.push(stripStepNumbering(String(item.text).trim()));
     });
     return out.filter(Boolean);
   }
@@ -1223,8 +1296,10 @@ function normalizeInstructions(instr){
 }
 function parseServings(y){
   if (!y) return null;
-  var str = Array.isArray(y) ? y[0] : y;
-  var m = String(str).match(/\d+/);
+  var str = Array.isArray(y) ? y.join(" ") : String(y);
+  var prefMatch = str.match(/(\d+)\s*(?:slices?|servings?|portions?)/i);
+  if (prefMatch) return parseInt(prefMatch[1],10);
+  var m = str.match(/\d+/);
   return m ? parseInt(m[0],10) : null;
 }
 function parseIsoTime(iso){
@@ -1288,7 +1363,7 @@ async function fetchPageHtml(url){
 function recipeNodeToDraft(node){
   var name = (typeof node.name==="string" && node.name) ? node.name : "Imported Recipe";
   var ingredientsRaw = node.recipeIngredient || node.ingredients || [];
-  var ingredients = ingredientsRaw.map(parseIngredientLine).filter(Boolean);
+  var ingredients = ingredientsRaw.filter(function(l){ return !looksLikeSectionHeader(l); }).map(parseIngredientLine).filter(Boolean);
   var steps = normalizeInstructions(node.recipeInstructions);
   var servings = parseServings(node.recipeYield) || 4;
   var time = parseIsoTime(node.totalTime) || "";
@@ -1323,7 +1398,7 @@ function handlePasteImport(){
   var name = (nameEl && nameEl.value.trim()) || "Imported Recipe";
   var ingLines = ingEl ? ingEl.value.split("\n").map(function(s){return s.trim();}).filter(Boolean) : [];
   var stepLines = stepsEl ? stepsEl.value.split("\n").map(function(s){return s.trim();}).filter(Boolean) : [];
-  var ingredients = ingLines.map(parseIngredientLine).filter(Boolean);
+  var ingredients = ingLines.filter(function(l){ return !looksLikeSectionHeader(l); }).map(parseIngredientLine).filter(Boolean);
   if (!ingredients.length && !stepLines.length){
     var statusEl = document.getElementById("import-status");
     if (statusEl) statusEl.textContent = "Paste at least some ingredients or steps first.";
