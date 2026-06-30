@@ -1032,7 +1032,8 @@ var state = {
   showMigrationBanner:false,
   migrationStatus:"",
   sharedRecipeView:null,   // a recipe opened via a ?recipe= share link, before/without saving a copy
-  pendingSharedRecipeId:null
+  pendingSharedRecipeId:null,
+  starterShares:{}         // starter recipe id -> Firestore doc id of this account's shareable clone of it
 };
 
 function mergedStarter(base){
@@ -1099,6 +1100,7 @@ function attachUserListeners(uid){
       state.hiddenIds = d.hiddenIds || [];
       state.week = d.week || [];
       state.checks = d.checks || {};
+      state.starterShares = d.starterShares || {};
       state.staples = (d.staples && d.staples.length) ? d.staples : DEFAULT_STAPLES.slice();
       stapleLoaded = true;
     } else if (!stapleLoaded){
@@ -1140,7 +1142,8 @@ async function savePrivateState(){
       hiddenIds: state.hiddenIds,
       week: state.week,
       checks: state.checks,
-      staples: state.staples
+      staples: state.staples,
+      starterShares: state.starterShares
     }, {merge:true});
   }catch(e){ console.error("Save failed:", e); }
 }
@@ -1150,6 +1153,7 @@ function saveHiddenIds(){ savePrivateState(); }
 function saveWeek(){ savePrivateState(); }
 function saveChecks(){ savePrivateState(); }
 function saveStaples(){ savePrivateState(); }
+function saveStarterShares(){ savePrivateState(); }
 
 /* ---- Auth actions ---- */
 async function signUp(email, password, displayName){
@@ -1199,15 +1203,48 @@ async function setRecipePublic(id, isPublic){
   try{ await db.collection("recipes").doc(id).update({isPublic: isPublic}); }
   catch(e){ console.error("Couldn't update sharing:", e); }
 }
+// Built-in starter recipes (and personal edits of them) aren't real Firestore
+// documents, so they can't be shared as-is. The first time someone shares one,
+// we create a real owned copy behind the scenes — this does NOT touch or replace
+// the recipe in their own cookbook, it just gives friends something fetchable.
+async function ensureStarterShareDoc(starterId){
+  var existingId = state.starterShares[starterId];
+  if (existingId && state.myRecipes.some(function(r){ return r.id===existingId; })){
+    return existingId;
+  }
+  var base = mergedStarter(STARTER_RECIPES.filter(function(s){return s.id===starterId;})[0]);
+  if (!base) return null;
+  var doc = {
+    name:base.name, tags:base.tags||[], kidFriendly:!!base.kidFriendly, kidNote:base.kidNote||"",
+    time:base.time||"", servings:base.servings||4, ingredients:base.ingredients||[], steps:base.steps||[],
+    ownerId: state.currentUser.uid, ownerName: state.currentUser.displayName || state.currentUser.email,
+    isPublic:false, sourceStarterId:starterId, createdAt:new Date().toISOString()
+  };
+  var ref = await db.collection("recipes").add(doc);
+  state.starterShares[starterId] = ref.id;
+  saveStarterShares();
+  return ref.id;
+}
+async function toggleStarterPublic(starterId, isPublic){
+  var docId = await ensureStarterShareDoc(starterId);
+  if (!docId) return;
+  await setRecipePublic(docId, isPublic);
+  render();
+}
+async function shareStarterLink(starterId){
+  var docId = await ensureStarterShareDoc(starterId);
+  if (!docId) return;
+  copyShareLink(docId, "share-link-status-"+starterId);
+}
 function getShareLink(id){
   var url = new URL(window.location.href);
   url.search = ""; url.hash = "";
   url.searchParams.set("recipe", id);
   return url.toString();
 }
-function copyShareLink(id){
+function copyShareLink(id, statusElId){
   var link = getShareLink(id);
-  var statusEl = document.getElementById("share-link-status-"+id);
+  var statusEl = document.getElementById(statusElId || ("share-link-status-"+id));
   function show(msg){ if (statusEl) statusEl.textContent = msg; }
   if (navigator.clipboard && navigator.clipboard.writeText){
     navigator.clipboard.writeText(link).then(function(){ show("Link copied!"); }).catch(function(){ show(link); });
@@ -2038,10 +2075,14 @@ function renderRecipeListArea(){
   html += '<div class="grid">';
   list.forEach(function(r){
     var added = inWeek(r.id);
+    var shareDocId = state.starterShares[r.id];
+    var shareDoc = shareDocId ? state.myRecipes.filter(function(x){return x.id===shareDocId;})[0] : null;
+    var isPublicSomehow = !!r.isPublic || !!(shareDoc && shareDoc.isPublic);
     html += '<div class="rcard" onclick="openRecipe(\''+r.id+'\')">'+
       '<div class="rcard-top"><h3>'+escapeHtml(r.name)+'</h3>'+
       '<div class="rcard-meta">'+escapeHtml(r.time||"")+' &middot; serves '+(r.servings||4)+'</div></div>'+
       '<div class="tagrow">'+
+      (isPublicSomehow?'<span class="tag" style="background:var(--sage);color:#fff;">🌐 Public</span>':'')+
       (r.kidFriendly?'<span class="tag kid">Kid-Friendly</span>':'')+
       (r.tags||[]).map(function(t){return '<span class="tag">'+escapeHtml(t)+'</span>';}).join('')+
       '</div>'+
@@ -2058,9 +2099,17 @@ function renderRecipeModal(r){
   var added = inWeek(r.id);
   var owned = isOwnedRecipe(r.id);
   var isStarter = !owned && !state.publicRecipes.some(function(p){return p.id===r.id;}) && !(state.sharedRecipeView && state.sharedRecipeView.id===r.id);
+
+  var starterShareDocId = isStarter ? state.starterShares[r.id] : null;
+  var starterShareDoc = starterShareDocId ? state.myRecipes.filter(function(x){return x.id===starterShareDocId;})[0] : null;
+  var starterIsPublic = !!(starterShareDoc && starterShareDoc.isPublic);
+
   var html = '<div class="overlay" onclick="if(event.target===this) closeModal()"><div class="modal">'+
     '<button class="modal-close" onclick="closeModal()">×</button>'+
-    '<div class="modal-head"><h2>'+escapeHtml(r.name)+'</h2>'+
+    '<div class="modal-head"><h2>'+escapeHtml(r.name)+
+    (owned && r.isPublic ? ' <span style="font-size:14px;font-family:\'Libre Franklin\',sans-serif;font-weight:700;color:var(--sage-dark);">🌐 Public</span>' : '')+
+    (isStarter && starterIsPublic ? ' <span style="font-size:14px;font-family:\'Libre Franklin\',sans-serif;font-weight:700;color:var(--sage-dark);">🌐 Public</span>' : '')+
+    '</h2>'+
     '<div class="rcard-meta">'+escapeHtml(r.time||"")+' &middot; serves '+(r.servings||4)+
     (!isStarter && !owned ? ' &middot; by '+escapeHtml(r.ownerName||"someone") : '')+
     '</div></div>'+
@@ -2083,13 +2132,26 @@ function renderRecipeModal(r){
       '<label>Sharing</label>'+
       '<div class="checkbox-row" style="margin-bottom:10px;">'+
       '<input type="checkbox" id="pub-'+r.id+'" '+(r.isPublic?"checked":"")+' onchange="setRecipePublic(\''+r.id+'\', this.checked)">'+
-      '<label for="pub-'+r.id+'" style="margin:0;">Make public (shows up in everyone\'s Community tab)</label>'+
+      '<label for="pub-'+r.id+'" style="margin:0;">'+(r.isPublic?"Public — shown in everyone's Community tab (uncheck to unshare)":"Make public (shows up in everyone's Community tab)")+'</label>'+
       '</div>'+
       '<div style="display:flex;gap:8px;align-items:center;">'+
       '<button type="button" class="btn secondary" onclick="copyShareLink(\''+r.id+'\')">Copy share link</button>'+
       '<span id="share-link-status-'+r.id+'" style="font-size:12.5px;color:var(--ink-soft);"></span>'+
       '</div>'+
       '<div style="font-size:12px;color:var(--ink-soft);margin-top:6px;">Anyone with the link can view this recipe and save their own copy, whether or not it\'s public.</div>'+
+      '</div>';
+  } else if (isStarter){
+    html += '<div class="field" style="margin-top:18px;border-top:1px dashed var(--line);padding-top:14px;">'+
+      '<label>Sharing</label>'+
+      '<div class="checkbox-row" style="margin-bottom:10px;">'+
+      '<input type="checkbox" id="pub-starter-'+r.id+'" '+(starterIsPublic?"checked":"")+' onchange="toggleStarterPublic(\''+r.id+'\', this.checked)">'+
+      '<label for="pub-starter-'+r.id+'" style="margin:0;">'+(starterIsPublic?"Public — shown in everyone's Community tab (uncheck to unshare)":"Make public (shows up in everyone's Community tab)")+'</label>'+
+      '</div>'+
+      '<div style="display:flex;gap:8px;align-items:center;">'+
+      '<button type="button" class="btn secondary" onclick="shareStarterLink(\''+r.id+'\')">Copy share link</button>'+
+      '<span id="share-link-status-'+r.id+'" style="font-size:12.5px;color:var(--ink-soft);"></span>'+
+      '</div>'+
+      '<div style="font-size:12px;color:var(--ink-soft);margin-top:6px;">Sharing a built-in recipe creates a copy friends can fetch by link — it won\'t change anything in your own cookbook.</div>'+
       '</div>';
   }
 
