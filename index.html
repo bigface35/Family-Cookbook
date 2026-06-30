@@ -334,6 +334,7 @@ body{margin:0;}
 
 <script src="https://www.gstatic.com/firebasejs/12.15.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/12.15.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.15.0/firebase-auth-compat.js"></script>
 <script>
 /* =========================================================
    FIREBASE INIT — shared family database (real-time sync)
@@ -1010,9 +1011,8 @@ var state = {
   search:"",
   activeTags:[],
   kidOnly:false,
-  customRecipes:[],
-  recipeEdits:{},     // starter recipe id -> full replacement object
-  hiddenIds:[],       // starter recipe ids removed by the user
+  recipeEdits:{},     // starter recipe id -> full replacement object (per-account)
+  hiddenIds:[],       // starter recipe ids removed by this account
   staples:[],         // [{id, name, note}]
   week:[],            // [{id, batches}]
   checks:{},          // key -> bool
@@ -1020,7 +1020,19 @@ var state = {
   formState:null,     // {mode:'add'|'edit', recipeId, ingRows}
   importMode:false,   // whether the "Import a recipe" modal is open
   importDraft:null,   // parsed {name, ingredients, steps, ...} waiting to prefill the add form
-  syncStatus:"connecting" // "connecting" | "synced" | "offline" | "error"
+  syncStatus:"connecting", // "connecting" | "synced" | "offline" | "error"
+
+  // --- accounts & sharing ---
+  currentUser:null,        // {uid, email, displayName} once signed in
+  authView:"signin",       // "signin" | "signup"
+  authError:"",
+  authBusy:false,
+  myRecipes:[],            // this account's own Firestore-backed recipes
+  publicRecipes:[],        // recipes anyone has marked public, across all accounts
+  showMigrationBanner:false,
+  migrationStatus:"",
+  sharedRecipeView:null,   // a recipe opened via a ?recipe= share link, before/without saving a copy
+  pendingSharedRecipeId:null
 };
 
 function mergedStarter(base){
@@ -1030,71 +1042,255 @@ function mergedStarter(base){
 }
 function allRecipes(){
   var starters = STARTER_RECIPES.map(mergedStarter).filter(function(r){ return !!r; });
-  return starters.concat(state.customRecipes);
+  return starters.concat(state.myRecipes);
 }
 function findRecipe(id){
   var all = allRecipes();
   for (var i=0;i<all.length;i++){ if (all[i].id===id) return all[i]; }
+  var pub = state.publicRecipes.filter(function(r){ return r.id===id; })[0];
+  if (pub) return pub;
+  if (state.sharedRecipeView && state.sharedRecipeView.id===id) return state.sharedRecipeView;
   return null;
+}
+function isOwnedRecipe(id){
+  return state.myRecipes.some(function(r){ return r.id===id; });
 }
 
 /* =========================================================
-   PERSISTENCE — Firebase Firestore (live sync across devices)
+   PERSISTENCE — Firebase Auth (accounts) + Firestore (live sync)
    ========================================================= */
+var auth = firebase.auth();
 var db = firebase.firestore();
 try{ db.enablePersistence({synchronizeTabs:true}); }catch(e){}
-var cookbookDocRef = db.collection("cookbook").doc("state");
-var applyingRemoteSnapshot = false;
+
+var activeUnsubscribers = [];
+function clearListeners(){
+  activeUnsubscribers.forEach(function(u){ try{ u(); }catch(e){} });
+  activeUnsubscribers = [];
+}
 
 function loadState(){
-  cookbookDocRef.onSnapshot(function(snap){
-    applyingRemoteSnapshot = true;
+  auth.onAuthStateChanged(function(user){
+    clearListeners();
+    if (!user){
+      state.currentUser = null;
+      render();
+      return;
+    }
+    state.currentUser = {uid:user.uid, email:user.email, displayName:user.displayName || user.email};
+    state.authError = "";
+    attachUserListeners(user.uid);
+    checkMigrationBanner(user.uid);
+    checkSharedRecipeLink();
+  }, function(err){
+    console.error("Auth error:", err);
+    state.authError = err.message;
+    render();
+  });
+}
+
+function attachUserListeners(uid){
+  var stateRef = db.collection("users").doc(uid).collection("private").doc("state");
+  var stapleLoaded = false;
+  var unsubState = stateRef.onSnapshot(function(snap){
     if (snap.exists){
       var d = snap.data();
-      state.customRecipes = d.customRecipes || [];
       state.recipeEdits = d.recipeEdits || {};
       state.hiddenIds = d.hiddenIds || [];
       state.week = d.week || [];
       state.checks = d.checks || {};
       state.staples = (d.staples && d.staples.length) ? d.staples : DEFAULT_STAPLES.slice();
-    } else {
-      // first time this Firestore project has ever been used — seed defaults
+      stapleLoaded = true;
+    } else if (!stapleLoaded){
       state.staples = DEFAULT_STAPLES.slice();
-      saveState();
+      savePrivateState();
+      stapleLoaded = true;
     }
     state.syncStatus = snap.metadata.fromCache ? "offline" : "synced";
-    applyingRemoteSnapshot = false;
-    // Don't blow away an in-progress add/edit form with a remote update.
     if (!state.formState) render();
   }, function(err){
-    console.error("Firestore sync error:", err);
+    console.error("Private state sync error:", err);
     state.syncStatus = "error";
     render();
   });
+  activeUnsubscribers.push(unsubState);
+
+  var unsubMine = db.collection("recipes").where("ownerId","==",uid).onSnapshot(function(qs){
+    var list = [];
+    qs.forEach(function(doc){ list.push(Object.assign({id:doc.id}, doc.data())); });
+    state.myRecipes = list;
+    if (!state.formState) render();
+  }, function(err){ console.error("My recipes sync error:", err); });
+  activeUnsubscribers.push(unsubMine);
+
+  var unsubPublic = db.collection("recipes").where("isPublic","==",true).onSnapshot(function(qs){
+    var list = [];
+    qs.forEach(function(doc){ list.push(Object.assign({id:doc.id}, doc.data())); });
+    state.publicRecipes = list;
+    if (!state.formState) render();
+  }, function(err){ console.error("Public recipes sync error:", err); });
+  activeUnsubscribers.push(unsubPublic);
 }
 
-async function saveState(){
-  if (applyingRemoteSnapshot) return; // avoid echoing a remote update straight back
+async function savePrivateState(){
+  if (!state.currentUser) return;
   try{
-    await cookbookDocRef.set({
-      customRecipes: state.customRecipes,
+    await db.collection("users").doc(state.currentUser.uid).collection("private").doc("state").set({
       recipeEdits: state.recipeEdits,
       hiddenIds: state.hiddenIds,
       week: state.week,
       checks: state.checks,
       staples: state.staples
     }, {merge:true});
+  }catch(e){ console.error("Save failed:", e); }
+}
+// Existing call sites below funnel into the single write above.
+function saveRecipeEdits(){ savePrivateState(); }
+function saveHiddenIds(){ savePrivateState(); }
+function saveWeek(){ savePrivateState(); }
+function saveChecks(){ savePrivateState(); }
+function saveStaples(){ savePrivateState(); }
+
+/* ---- Auth actions ---- */
+async function signUp(email, password, displayName){
+  state.authBusy = true; state.authError = ""; render();
+  try{
+    var cred = await auth.createUserWithEmailAndPassword(email, password);
+    if (displayName) await cred.user.updateProfile({displayName: displayName});
+    await db.collection("users").doc(cred.user.uid).set({
+      email: email, displayName: displayName || email, createdAt: new Date().toISOString()
+    }, {merge:true});
   }catch(e){
-    console.error("Save failed:", e);
+    state.authError = e.message;
+  }
+  state.authBusy = false;
+  render();
+}
+async function signIn(email, password){
+  state.authBusy = true; state.authError = ""; render();
+  try{
+    await auth.signInWithEmailAndPassword(email, password);
+  }catch(e){
+    state.authError = e.message;
+  }
+  state.authBusy = false;
+  render();
+}
+function signOutUser(){
+  auth.signOut();
+}
+function setAuthView(v){ state.authView = v; state.authError = ""; render(); }
+
+function submitAuthForm(ev){
+  ev.preventDefault();
+  var f = ev.target;
+  var email = f.querySelector("[name=email]").value.trim();
+  var password = f.querySelector("[name=password]").value;
+  if (state.authView==="signup"){
+    var name = f.querySelector("[name=displayName]").value.trim();
+    signUp(email, password, name);
+  } else {
+    signIn(email, password);
   }
 }
-// All six call sites below funnel into the single saveState() write above.
-function saveCustomRecipes(){ saveState(); }
-function saveRecipeEdits(){ saveState(); }
-function saveHiddenIds(){ saveState(); }
-function saveWeek(){ saveState(); }
-function saveChecks(){ saveState(); }
-function saveStaples(){ saveState(); }
+
+/* ---- Recipe sharing: public toggle, share links, save-a-copy, migration ---- */
+async function setRecipePublic(id, isPublic){
+  try{ await db.collection("recipes").doc(id).update({isPublic: isPublic}); }
+  catch(e){ console.error("Couldn't update sharing:", e); }
+}
+function getShareLink(id){
+  var url = new URL(window.location.href);
+  url.search = ""; url.hash = "";
+  url.searchParams.set("recipe", id);
+  return url.toString();
+}
+function copyShareLink(id){
+  var link = getShareLink(id);
+  var statusEl = document.getElementById("share-link-status-"+id);
+  function show(msg){ if (statusEl) statusEl.textContent = msg; }
+  if (navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(link).then(function(){ show("Link copied!"); }).catch(function(){ show(link); });
+  } else {
+    show(link);
+  }
+}
+async function saveCommunityCopy(id){
+  var r = state.publicRecipes.filter(function(x){return x.id===id;})[0] || (state.sharedRecipeView && state.sharedRecipeView.id===id ? state.sharedRecipeView : null);
+  if (!r || !state.currentUser) return;
+  var copy = {
+    name:r.name, tags:r.tags||[], kidFriendly:!!r.kidFriendly, kidNote:r.kidNote||"",
+    time:r.time||"", servings:r.servings||4, ingredients:r.ingredients||[], steps:r.steps||[],
+    ownerId: state.currentUser.uid, ownerName: state.currentUser.displayName || state.currentUser.email,
+    isPublic:false, createdAt:new Date().toISOString()
+  };
+  try{
+    await db.collection("recipes").add(copy);
+    state.sharedRecipeView = null;
+    state.pendingSharedRecipeId = null;
+    state.tab = "recipes";
+    render();
+  }catch(e){ console.error("Couldn't save a copy:", e); }
+}
+
+async function checkMigrationBanner(uid){
+  try{
+    var mineSnap = await db.collection("recipes").where("ownerId","==",uid).limit(1).get();
+    if (!mineSnap.empty){ state.showMigrationBanner = false; return; }
+    var stateDoc = await db.collection("users").doc(uid).collection("private").doc("state").get();
+    if (stateDoc.exists && stateDoc.data().week && stateDoc.data().week.length){ state.showMigrationBanner = false; return; }
+    var oldDoc = await db.collection("cookbook").doc("state").get();
+    state.showMigrationBanner = oldDoc.exists;
+    render();
+  }catch(e){ state.showMigrationBanner = false; }
+}
+async function migrateOldCookbook(){
+  if (!state.currentUser) return;
+  state.migrationStatus = "Importing…";
+  render();
+  try{
+    var doc = await db.collection("cookbook").doc("state").get();
+    if (!doc.exists){ state.migrationStatus = "No old cookbook found."; render(); return; }
+    var old = doc.data();
+    await db.collection("users").doc(state.currentUser.uid).collection("private").doc("state").set({
+      week: old.week||[], checks: old.checks||{},
+      staples: (old.staples&&old.staples.length) ? old.staples : DEFAULT_STAPLES.slice(),
+      recipeEdits: old.recipeEdits||{}, hiddenIds: old.hiddenIds||[]
+    }, {merge:true});
+    var customs = old.customRecipes || [];
+    for (var i=0;i<customs.length;i++){
+      var r = customs[i];
+      var copy = {
+        name:r.name, tags:r.tags||[], kidFriendly:!!r.kidFriendly, kidNote:r.kidNote||"",
+        time:r.time||"", servings:r.servings||4, ingredients:r.ingredients||[], steps:r.steps||[],
+        ownerId: state.currentUser.uid, ownerName: state.currentUser.displayName || state.currentUser.email,
+        isPublic:false, createdAt:new Date().toISOString()
+      };
+      await db.collection("recipes").add(copy);
+    }
+    state.showMigrationBanner = false;
+    state.migrationStatus = "Imported " + customs.length + " recipe" + (customs.length===1?"":"s") + " and your weekly plan!";
+    render();
+  }catch(e){
+    state.migrationStatus = "Import failed: " + e.message;
+    render();
+  }
+}
+function dismissMigrationBanner(){ state.showMigrationBanner = false; render(); }
+
+function checkSharedRecipeLink(){
+  var params = new URLSearchParams(window.location.search);
+  var id = params.get("recipe");
+  if (!id) return;
+  state.pendingSharedRecipeId = id;
+  db.collection("recipes").doc(id).get().then(function(doc){
+    if (doc.exists){
+      state.sharedRecipeView = Object.assign({id:doc.id}, doc.data());
+      state.modalRecipe = doc.id;
+    }
+    render();
+  }).catch(function(e){ console.error("Couldn't load shared recipe:", e); });
+}
 
 /* =========================================================
    HELPERS
@@ -1460,7 +1656,18 @@ function refreshRecipeListArea(){
 }
 
 function openRecipe(id){ state.modalRecipe = id; state.formState = null; state.importMode = false; render(); }
-function closeModal(){ state.modalRecipe = null; state.formState = null; state.importMode = false; state.importDraft = null; render(); }
+function closeModal(){
+  state.modalRecipe = null; state.formState = null; state.importMode = false; state.importDraft = null;
+  if (state.sharedRecipeView){
+    state.sharedRecipeView = null; state.pendingSharedRecipeId = null;
+    try{
+      var url = new URL(window.location.href);
+      url.searchParams.delete("recipe");
+      window.history.replaceState({}, "", url.toString());
+    }catch(e){}
+  }
+  render();
+}
 
 function toggleWeek(id){
   if (inWeek(id)){
@@ -1541,10 +1748,10 @@ function addIngRow(){
   c.scrollTop = c.scrollHeight;
 }
 
-function submitRecipeForm(ev){
+async function submitRecipeForm(ev){
   ev.preventDefault();
   var fs = state.formState;
-  if (!fs) return;
+  if (!fs || !state.currentUser) return;
   var f = ev.target;
   var name = f.querySelector("[name=rname]").value.trim();
   if (!name) return;
@@ -1574,23 +1781,30 @@ function submitRecipeForm(ev){
   });
   if (!ingredients.length) return;
 
-  var id = fs.mode==="edit" ? fs.recipeId : ("custom-"+Date.now());
-  var newRecipe = {id:id, name:name, tags:tags, kidFriendly:kidFriendly, time:time, servings:servings, ingredients:ingredients, steps:steps};
-  if (kidNote) newRecipe.kidNote = kidNote;
-
-  if (fs.mode==="edit"){
-    if (id.indexOf("custom-")===0){
-      var idx = -1;
-      for (var i=0;i<state.customRecipes.length;i++){ if (state.customRecipes[i].id===id){ idx=i; break; } }
-      if (idx>-1) state.customRecipes[idx] = newRecipe;
-      saveCustomRecipes();
-    } else {
-      state.recipeEdits[id] = newRecipe;
-      saveRecipeEdits();
-    }
+  if (fs.mode==="edit" && isOwnedRecipe(fs.recipeId)){
+    // editing one of THIS account's own Firestore-backed recipes
+    try{
+      await db.collection("recipes").doc(fs.recipeId).update({
+        name:name, tags:tags, kidFriendly:kidFriendly, kidNote:kidNote||"",
+        time:time, servings:servings, ingredients:ingredients, steps:steps
+      });
+    }catch(e){ console.error("Couldn't save recipe:", e); }
+  } else if (fs.mode==="edit"){
+    // editing a built-in starter recipe -> personal override, same as before
+    var newRecipe = {id:fs.recipeId, name:name, tags:tags, kidFriendly:kidFriendly, time:time, servings:servings, ingredients:ingredients, steps:steps};
+    if (kidNote) newRecipe.kidNote = kidNote;
+    state.recipeEdits[fs.recipeId] = newRecipe;
+    saveRecipeEdits();
   } else {
-    state.customRecipes.push(newRecipe);
-    saveCustomRecipes();
+    // brand new recipe, owned by this account
+    var doc = {
+      name:name, tags:tags, kidFriendly:kidFriendly, kidNote:kidNote||"",
+      time:time, servings:servings, ingredients:ingredients, steps:steps,
+      ownerId: state.currentUser.uid, ownerName: state.currentUser.displayName || state.currentUser.email,
+      isPublic:false, createdAt:new Date().toISOString()
+    };
+    try{ await db.collection("recipes").add(doc); }
+    catch(e){ console.error("Couldn't save recipe:", e); }
   }
   state.formState = null;
   state.modalRecipe = null;
@@ -1599,10 +1813,10 @@ function submitRecipeForm(ev){
   render();
 }
 
-function removeRecipeFromCookbook(id){
-  if (id.indexOf("custom-")===0){
-    state.customRecipes = state.customRecipes.filter(function(r){ return r.id!==id; });
-    saveCustomRecipes();
+async function removeRecipeFromCookbook(id){
+  if (isOwnedRecipe(id)){
+    try{ await db.collection("recipes").doc(id).delete(); }
+    catch(e){ console.error("Couldn't remove recipe:", e); }
   } else {
     if (state.hiddenIds.indexOf(id)===-1) state.hiddenIds.push(id);
     saveHiddenIds();
@@ -1666,14 +1880,21 @@ function buildShoppingMap(){
    ========================================================= */
 function render(){
   var app = document.getElementById("app");
+  if (!state.currentUser){
+    app.innerHTML = renderAuthGate();
+    attachFormHandler();
+    return;
+  }
   var html = "";
   html += renderHero();
   html += '<div class="wrap">';
   html += renderTabs();
+  if (state.showMigrationBanner) html += renderMigrationBanner();
   if (state.tab==="recipes") html += renderRecipesTab();
   if (state.tab==="week") html += renderWeekTab();
   if (state.tab==="shopping") html += renderShoppingTab();
   if (state.tab==="staples") html += renderStaplesTab();
+  if (state.tab==="community") html += renderCommunityTab();
   html += '</div>';
   if (state.formState){
     html += renderRecipeFormModal();
@@ -1684,6 +1905,61 @@ function render(){
   }
   app.innerHTML = html;
   attachFormHandler();
+}
+
+function renderAuthGate(){
+  var isSignup = state.authView==="signup";
+  return '<div class="hero"><h1>Minear Family Recipes</h1>'+
+    '<p>Sign in to your account to get cooking</p></div>'+
+    '<div class="wrap" style="max-width:420px;padding-top:30px;">'+
+    '<div class="modal" style="margin:0;">'+
+    '<div class="modal-head"><h2>'+(isSignup?"Create an account":"Sign in")+'</h2>'+
+    '<div class="rcard-meta">'+(isSignup?"Get your own private cookbook":"Welcome back")+'</div></div>'+
+    '<div class="modal-body"><form id="auth-form">'+
+    (isSignup ? '<div class="field"><label>Your name</label><input type="text" name="displayName" placeholder="e.g. Sam"></div>' : '')+
+    '<div class="field"><label>Email</label><input type="text" name="email" required autocomplete="username"></div>'+
+    '<div class="field"><label>Password</label><input type="password" name="password" required autocomplete="'+(isSignup?"new-password":"current-password")+'" minlength="6"></div>'+
+    (state.authError ? '<div style="color:var(--rule-dark);font-size:13px;margin-bottom:10px;">'+escapeHtml(state.authError)+'</div>' : '')+
+    '<div class="modal-actions">'+
+    '<button type="submit" class="btn" '+(state.authBusy?"disabled":"")+'>'+(state.authBusy?"Please wait…":(isSignup?"Create account":"Sign in"))+'</button>'+
+    '</div></form>'+
+    '<div style="text-align:center;margin-top:14px;font-size:13.5px;color:var(--ink-soft);">'+
+    (isSignup ? 'Already have an account? <a href="#" onclick="setAuthView(\'signin\');return false;" style="color:var(--rule-dark);font-weight:700;">Sign in</a>'
+              : 'New here? <a href="#" onclick="setAuthView(\'signup\');return false;" style="color:var(--rule-dark);font-weight:700;">Create an account</a>')+
+    '</div>'+
+    '</div></div></div>';
+}
+
+function renderMigrationBanner(){
+  return '<div style="background:var(--card);border:1.5px solid var(--mustard);border-radius:var(--radius);padding:14px 16px;margin-bottom:18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">'+
+    '<span style="font-size:13.5px;flex:1;">Looks like there\'s an older shared cookbook on this site — want to bring its recipes and weekly plan into your account?</span>'+
+    '<button class="btn" onclick="migrateOldCookbook()">Import it</button>'+
+    '<button class="btn secondary" onclick="dismissMigrationBanner()">Dismiss</button>'+
+    (state.migrationStatus ? '<div style="width:100%;font-size:13px;color:var(--ink-soft);">'+escapeHtml(state.migrationStatus)+'</div>' : '')+
+    '</div>';
+}
+
+function renderCommunityTab(){
+  var list = state.publicRecipes.slice().sort(function(a,b){ return (a.name||"").localeCompare(b.name||""); });
+  if (!list.length){
+    return '<div class="empty"><span class="big">No public recipes yet</span>When someone marks a recipe public, it\'ll show up here for anyone to save a copy of.</div>';
+  }
+  var html = '<div class="grid">';
+  list.forEach(function(r){
+    var mine = r.ownerId === state.currentUser.uid;
+    html += '<div class="rcard" onclick="openRecipe(\''+r.id+'\')">'+
+      '<div class="rcard-top"><h3>'+escapeHtml(r.name)+'</h3>'+
+      '<div class="rcard-meta">'+escapeHtml(r.time||"")+' &middot; serves '+(r.servings||4)+' &middot; by '+escapeHtml(mine?"you":(r.ownerName||"someone"))+'</div></div>'+
+      '<div class="tagrow">'+
+      (r.kidFriendly?'<span class="tag kid">Kid-Friendly</span>':'')+
+      (r.tags||[]).map(function(t){return '<span class="tag">'+escapeHtml(t)+'</span>';}).join('')+
+      '</div>'+
+      '<div class="rcard-foot"><span style="font-size:12px;color:var(--ink-soft);font-weight:600;">View recipe →</span>'+
+      (mine ? '<span class="add-btn added">Yours</span>' : '<button class="add-btn" onclick="event.stopPropagation();saveCommunityCopy(\''+r.id+'\')">Save a copy</button>')+
+      '</div></div>';
+  });
+  html += '</div>';
+  return html;
 }
 
 function renderHero(){
@@ -1704,12 +1980,17 @@ function renderTabs(){
   var wc = state.week.length;
   var map = buildShoppingMap();
   var itemCount = Object.keys(map).length + state.staples.length;
-  return '<div class="tabs">'+
+  var html = '<div class="tabs">'+
     tabBtn("recipes","Recipes", allRecipes().length)+
     tabBtn("week","This Week", wc)+
     tabBtn("shopping","Shopping List", itemCount)+
     tabBtn("staples","Staples", state.staples.length)+
+    tabBtn("community","Community", state.publicRecipes.length)+
     '</div>';
+  html += '<div style="text-align:center;font-size:12.5px;color:var(--ink-soft);margin:-6px 0 6px;">'+
+    'Signed in as '+escapeHtml(state.currentUser.displayName||state.currentUser.email)+
+    ' &middot; <a href="#" onclick="signOutUser();return false;" style="color:var(--rule-dark);font-weight:700;">Sign out</a></div>';
+  return html;
 }
 function tabBtn(key,label,count){
   var cls = "tab-btn"+(state.tab===key?" active":"");
@@ -1775,10 +2056,14 @@ function renderRecipeListArea(){
 function renderRecipeModal(r){
   if (!r) return "";
   var added = inWeek(r.id);
+  var owned = isOwnedRecipe(r.id);
+  var isStarter = !owned && !state.publicRecipes.some(function(p){return p.id===r.id;}) && !(state.sharedRecipeView && state.sharedRecipeView.id===r.id);
   var html = '<div class="overlay" onclick="if(event.target===this) closeModal()"><div class="modal">'+
     '<button class="modal-close" onclick="closeModal()">×</button>'+
     '<div class="modal-head"><h2>'+escapeHtml(r.name)+'</h2>'+
-    '<div class="rcard-meta">'+escapeHtml(r.time||"")+' &middot; serves '+(r.servings||4)+'</div></div>'+
+    '<div class="rcard-meta">'+escapeHtml(r.time||"")+' &middot; serves '+(r.servings||4)+
+    (!isStarter && !owned ? ' &middot; by '+escapeHtml(r.ownerName||"someone") : '')+
+    '</div></div>'+
     '<div class="modal-body">';
   html += '<h4>Ingredients</h4><ul class="ing-list">';
   r.ingredients.forEach(function(ing){
@@ -1792,12 +2077,36 @@ function renderRecipeModal(r){
   if (r.kidNote){
     html += '<div class="kid-note"><strong>For the toddler:</strong> '+escapeHtml(r.kidNote)+'</div>';
   }
-  html += '<div class="modal-actions">'+
-    '<button class="btn" onclick="toggleWeek(\''+r.id+'\')">'+(added?"✓ On this week's list":"+ Add to this week")+'</button>'+
-    '<button class="btn secondary" onclick="openEditForm(\''+r.id+'\')">Edit recipe</button>'+
-    '<button class="btn danger" onclick="removeRecipeFromCookbook(\''+r.id+'\')">Remove from cookbook</button>'+
-    '<button class="btn secondary" onclick="closeModal()">Close</button>'+
-    '</div>';
+
+  if (owned){
+    html += '<div class="field" style="margin-top:18px;border-top:1px dashed var(--line);padding-top:14px;">'+
+      '<label>Sharing</label>'+
+      '<div class="checkbox-row" style="margin-bottom:10px;">'+
+      '<input type="checkbox" id="pub-'+r.id+'" '+(r.isPublic?"checked":"")+' onchange="setRecipePublic(\''+r.id+'\', this.checked)">'+
+      '<label for="pub-'+r.id+'" style="margin:0;">Make public (shows up in everyone\'s Community tab)</label>'+
+      '</div>'+
+      '<div style="display:flex;gap:8px;align-items:center;">'+
+      '<button type="button" class="btn secondary" onclick="copyShareLink(\''+r.id+'\')">Copy share link</button>'+
+      '<span id="share-link-status-'+r.id+'" style="font-size:12.5px;color:var(--ink-soft);"></span>'+
+      '</div>'+
+      '<div style="font-size:12px;color:var(--ink-soft);margin-top:6px;">Anyone with the link can view this recipe and save their own copy, whether or not it\'s public.</div>'+
+      '</div>';
+  }
+
+  html += '<div class="modal-actions">';
+  if (owned){
+    html += '<button class="btn" onclick="toggleWeek(\''+r.id+'\')">'+(added?"✓ On this week's list":"+ Add to this week")+'</button>'+
+      '<button class="btn secondary" onclick="openEditForm(\''+r.id+'\')">Edit recipe</button>'+
+      '<button class="btn danger" onclick="removeRecipeFromCookbook(\''+r.id+'\')">Remove from cookbook</button>';
+  } else if (isStarter){
+    html += '<button class="btn" onclick="toggleWeek(\''+r.id+'\')">'+(added?"✓ On this week's list":"+ Add to this week")+'</button>'+
+      '<button class="btn secondary" onclick="openEditForm(\''+r.id+'\')">Edit recipe</button>'+
+      '<button class="btn danger" onclick="removeRecipeFromCookbook(\''+r.id+'\')">Remove from cookbook</button>';
+  } else {
+    html += '<button class="btn" onclick="saveCommunityCopy(\''+r.id+'\')">Save a copy to my cookbook</button>';
+  }
+  html += '<button class="btn secondary" onclick="closeModal()">Close</button>';
+  html += '</div>';
   html += '</div></div></div>';
   return html;
 }
@@ -1974,6 +2283,8 @@ function renderImportModal(){
 function attachFormHandler(){
   var f = document.getElementById("recipe-form");
   if (f) f.addEventListener("submit", submitRecipeForm);
+  var af = document.getElementById("auth-form");
+  if (af) af.addEventListener("submit", submitAuthForm);
 }
 
 /* =========================================================
