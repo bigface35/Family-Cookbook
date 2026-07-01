@@ -2,20 +2,21 @@
   "name": "Minear Family Recipes",
   "short_name": "Minear Recipes",
   "description": "The Minear family recipe book, weekly planner, and shopping list.",
-  "start_url": "/",
+  "start_url": "/Family-Cookbook/",
+  "scope": "/Family-Cookbook/",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#E8DEC6",
   "theme_color": "#E8DEC6",
   "icons": [
     {
-      "src": "icon-192.png",
+      "src": "/Family-Cookbook/icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "icon-512.png",
+      "src": "/Family-Cookbook/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
@@ -25,12 +26,12 @@
   "shortcuts": [
     {
       "name": "This Week",
-      "url": "/?tab=week",
+      "url": "/Family-Cookbook/?tab=week",
       "description": "View and plan this week's meals"
     },
     {
       "name": "Shopping List",
-      "url": "/?tab=shopping",
+      "url": "/Family-Cookbook/?tab=shopping",
       "description": "View the grocery list"
     }
   ]
