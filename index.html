@@ -1475,8 +1475,13 @@ function submitAuthForm(ev){
 
 /* ---- Recipe sharing: public toggle, share links, save-a-copy, migration ---- */
 async function setRecipePublic(id, isPublic){
-  try{ await db.collection("recipes").doc(id).update({isPublic: isPublic}); }
-  catch(e){ console.error("Couldn't update sharing:", e); }
+  try{
+    await db.collection("recipes").doc(id).update({isPublic: isPublic});
+    return true;
+  }catch(e){
+    console.error("Couldn't update sharing:", e);
+    return false;
+  }
 }
 // Built-in starter recipes (and personal edits of them) aren't real Firestore
 // documents, so they can't be shared as-is. The first time someone shares one,
@@ -1501,15 +1506,39 @@ async function ensureStarterShareDoc(starterId){
   return ref.id;
 }
 async function toggleStarterPublic(starterId, isPublic){
+  // Don't call render() here — the onSnapshot listener will re-render once
+  // Firestore confirms the change, ensuring the checkbox shows the correct state.
+  // Calling render() early was causing the checkbox to snap back to its old value.
   var docId = await ensureStarterShareDoc(starterId);
   if (!docId) return;
   await setRecipePublic(docId, isPublic);
-  render();
 }
 async function shareStarterLink(starterId){
   var docId = await ensureStarterShareDoc(starterId);
   if (!docId) return;
   copyShareLink(docId, "share-link-status-"+starterId);
+}
+// Push the current (possibly edited) version of a starter recipe
+// back to its public share doc so the community sees the latest.
+async function refreshStarterShareDoc(starterId){
+  var docId = state.starterShares[starterId];
+  if (!docId) return;
+  var r = findRecipe(starterId);
+  if (!r) return;
+  var statusEl = document.getElementById("share-refresh-status-"+starterId);
+  function setStatus(msg){ if (statusEl) statusEl.textContent = msg; }
+  setStatus("Updating…");
+  try{
+    await db.collection("recipes").doc(docId).update({
+      name:r.name, tags:r.tags||[], kidFriendly:!!r.kidFriendly, kidNote:r.kidNote||"",
+      time:r.time||"", servings:r.servings||4, ingredients:r.ingredients||[], steps:r.steps||[]
+    });
+    setStatus("Updated ✓");
+    setTimeout(function(){ setStatus(""); }, 2500);
+  }catch(e){
+    setStatus("Couldn't update — try again");
+    console.error("Couldn't refresh share doc:", e);
+  }
 }
 function getShareLink(id){
   var url = new URL(window.location.href);
@@ -2452,26 +2481,32 @@ function renderRecipeModal(r){
       '<label>Sharing</label>'+
       '<div class="checkbox-row" style="margin-bottom:10px;">'+
       '<input type="checkbox" id="pub-'+r.id+'" '+(r.isPublic?"checked":"")+' onchange="setRecipePublic(\''+r.id+'\', this.checked)">'+
-      '<label for="pub-'+r.id+'" style="margin:0;">'+(r.isPublic?"Public — shown in everyone's Community tab (uncheck to unshare)":"Make public (shows up in everyone's Community tab)")+'</label>'+
+      '<label for="pub-'+r.id+'" style="margin:0;">'+(r.isPublic?'🌐 Public — visible to everyone in Community':'Make public — share in the Community tab')+'</label>'+
       '</div>'+
-      '<div style="display:flex;gap:8px;align-items:center;">'+
-      '<button type="button" class="btn secondary" onclick="copyShareLink(\''+r.id+'\')">Copy share link</button>'+
-      '<span id="share-link-status-'+r.id+'" style="font-size:12.5px;color:var(--ink-soft);"></span>'+
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'+
+      '<button type="button" class="btn secondary" style="font-size:12px;padding:7px 12px;min-height:36px;" onclick="copyShareLink(\''+r.id+'\')">Copy share link</button>'+
+      '<span id="share-link-status-'+r.id+'" style="font-size:12px;color:var(--amber-lo);"></span>'+
       '</div>'+
-      '<div style="font-size:12px;color:var(--ink-soft);margin-top:6px;">Anyone with the link can view this recipe and save their own copy, whether or not it\'s public.</div>'+
+      '<div style="font-size:12px;color:var(--text-muted);margin-top:8px;">Anyone with the link can view and save their own copy. If you edit and save this recipe, the Community listing updates automatically — friends who already saved a copy keep their version.</div>'+
       '</div>';
   } else if (isStarter){
+    var hasShareDoc = !!starterShareDocId;
     html += '<div class="sharing-section">'+
       '<label>Sharing</label>'+
       '<div class="checkbox-row" style="margin-bottom:10px;">'+
       '<input type="checkbox" id="pub-starter-'+r.id+'" '+(starterIsPublic?"checked":"")+' onchange="toggleStarterPublic(\''+r.id+'\', this.checked)">'+
-      '<label for="pub-starter-'+r.id+'" style="margin:0;">'+(starterIsPublic?"Public — shown in everyone's Community tab (uncheck to unshare)":"Make public (shows up in everyone's Community tab)")+'</label>'+
+      '<label for="pub-starter-'+r.id+'" style="margin:0;">'+(starterIsPublic?'🌐 Public — visible to everyone in Community':'Make public — share in the Community tab')+'</label>'+
       '</div>'+
-      '<div style="display:flex;gap:8px;align-items:center;">'+
-      '<button type="button" class="btn secondary" onclick="shareStarterLink(\''+r.id+'\')">Copy share link</button>'+
-      '<span id="share-link-status-'+r.id+'" style="font-size:12.5px;color:var(--ink-soft);"></span>'+
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">'+
+      '<button type="button" class="btn secondary" style="font-size:12px;padding:7px 12px;min-height:36px;" onclick="shareStarterLink(\''+r.id+'\')">Copy share link</button>'+
+      '<span id="share-link-status-'+r.id+'" style="font-size:12px;color:var(--amber-lo);"></span>'+
       '</div>'+
-      '<div style="font-size:12px;color:var(--ink-soft);margin-top:6px;">Sharing a built-in recipe creates a copy friends can fetch by link — it won\'t change anything in your own cookbook.</div>'+
+      (hasShareDoc ?
+        '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'+
+        '<button type="button" class="btn secondary" style="font-size:12px;padding:7px 12px;min-height:36px;" onclick="refreshStarterShareDoc(\''+r.id+'\')">Push latest edits to Community</button>'+
+        '<span id="share-refresh-status-'+r.id+'" style="font-size:12px;color:var(--amber-lo);"></span>'+
+        '</div>' : '')+
+      '<div style="font-size:12px;color:var(--text-muted);margin-top:8px;">Sharing a built-in recipe creates a separate copy for friends to fetch — nothing in your own cookbook changes. If you\'ve edited this recipe, use "Push latest edits" to update what friends see.</div>'+
       '</div>';
   }
 
