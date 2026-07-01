@@ -393,7 +393,7 @@ input[type=checkbox]{-webkit-appearance:checkbox;appearance:checkbox;}
 }
 .field select option{background:var(--bg-raised);color:var(--text);}
 .field textarea{resize:vertical;min-height:80px;font-size:15px;}
-.ing-row{display:grid;grid-template-columns:64px 70px 1fr 120px auto;gap:5px;margin-bottom:8px;align-items:center;}
+.ing-row{display:grid;grid-template-columns:28px 64px 70px 1fr 120px auto;gap:5px;margin-bottom:8px;align-items:center;}
 .ing-row input,.ing-row select{
   padding:8px 6px;font-size:14px;border:1.5px solid var(--border-mid);
   border-radius:6px;background:var(--bg-raised);color:var(--text);min-height:40px;
@@ -572,12 +572,18 @@ input[type=checkbox]{-webkit-appearance:checkbox;appearance:checkbox;}
   .modal-actions{flex-direction:column;}
   .modal-actions .btn{width:100%;text-align:center;}
 
-  .ing-row{grid-template-columns:1fr 1fr;grid-template-rows:auto auto;gap:5px;}
-  .ing-row input[name=iamt]{order:1;}
-  .ing-row input[name=iunit]{order:2;}
-  .ing-row input[name=iname]{grid-column:1/-1;order:3;}
+  .ing-row{
+    display:flex;flex-wrap:wrap;gap:5px;align-items:center;
+    background:var(--bg-raised);border-radius:8px;
+    padding:8px 8px 8px 4px;margin-bottom:8px;
+    border:1px solid var(--border-mid);
+  }
+  .ing-row .drag-handle{flex:0 0 auto;align-self:center;}
+  .ing-row input[name=iamt]{flex:0 1 70px;min-width:50px;}
+  .ing-row input[name=iunit]{flex:0 1 70px;min-width:50px;}
+  .ing-row input[name=iname]{flex:1 1 100%;order:4;}
   .ing-row select{display:none;}
-  .drag-handle{order:0;}
+  .ing-row .small-x{flex:0 0 auto;order:3;}
 
   .step-row{grid-template-columns:auto 1fr auto;}
 
@@ -2039,11 +2045,20 @@ function ingRowHtml(ing){
     return '<option value="'+escapeHtml(c)+'"'+(c===cat?" selected":"")+'>'+escapeHtml(c)+'</option>';
   }).join('');
   return '<div class="ing-row">'+
+    '<span class="drag-handle" title="Drag to reorder">⠿</span>'+
     '<input type="text" name="iamt" placeholder="Amt" value="'+escapeHtml(amt)+'" inputmode="decimal">'+
     '<input type="text" name="iunit" placeholder="Unit" value="'+escapeHtml(unit)+'">'+
     '<input type="text" name="iname" placeholder="Ingredient name" value="'+escapeHtml(name)+'">'+
     '<select name="icat">'+catOpts+'</select>'+
-    '<button type="button" class="small-x" onclick="this.closest(\'.ing-row\').remove()">✕</button>'+
+    '<button type="button" class="small-x" onclick="this.closest(\'.ing-row\').remove()" title="Remove">✕</button>'+
+    '</div>';
+}
+
+function stepRowHtml(text){
+  return '<div class="step-row">'+
+    '<span class="drag-handle" title="Drag to reorder">⠿</span>'+
+    '<input type="text" name="step-text" value="'+escapeHtml(text||"")+'" placeholder="Describe this step…">'+
+    '<button type="button" class="small-x" onclick="this.closest(\'.step-row\').remove()" title="Remove">✕</button>'+
     '</div>';
 }
 
@@ -2052,6 +2067,17 @@ function addIngRow(){
   if (!c) return;
   c.insertAdjacentHTML("beforeend", ingRowHtml(null));
   c.scrollTop = c.scrollHeight;
+  setupRowDrag("ing-rows");
+}
+
+function addStepRow(){
+  var c = document.getElementById("step-rows");
+  if (!c) return;
+  c.insertAdjacentHTML("beforeend", stepRowHtml(""));
+  c.scrollTop = c.scrollHeight;
+  var inputs = c.querySelectorAll("[name=step-text]");
+  if (inputs.length) inputs[inputs.length-1].focus();
+  setupRowDrag("step-rows");
 }
 
 async function submitRecipeForm(ev){
@@ -2067,8 +2093,10 @@ async function submitRecipeForm(ev){
   var servings = parseInt(f.querySelector("[name=rservings]").value,10) || 4;
   var kidFriendly = f.querySelector("[name=rkid]").checked;
   var kidNote = f.querySelector("[name=rkidnote]").value.trim();
-  var stepsRaw = f.querySelector("[name=rsteps]").value.trim();
-  var steps = stepsRaw ? stepsRaw.split("\n").map(function(s){return s.trim();}).filter(Boolean) : [];
+  var stepsRaw = f.querySelector("[name=rsteps]");
+  var steps = stepsRaw
+    ? stepsRaw.value.trim().split("\n").map(function(s){return s.trim();}).filter(Boolean)
+    : Array.from(f.querySelectorAll("[name=step-text]")).map(function(i){return i.value.trim();}).filter(Boolean);
 
   var ingredients = [];
   var rows = f.querySelectorAll(".ing-row");
@@ -2583,9 +2611,16 @@ function renderRecipeFormModal(){
   var kidNoteVal = recipe && recipe.kidNote ? recipe.kidNote : "";
   var stepsVal = recipe ? (recipe.steps||[]).join("\n") : "";
 
+  var stepsHtml = "";
+  if (recipe && recipe.steps && recipe.steps.length){
+    recipe.steps.forEach(function(s){ stepsHtml += stepRowHtml(s); });
+  } else {
+    stepsHtml += stepRowHtml("");
+  }
+
   var isImport = !isEdit && !!state.importDraft;
   var heading = isEdit ? "Edit recipe" : (isImport ? "Review imported recipe" : "Add a recipe");
-  var sub = isEdit ? "Tweak it to match how you actually make it" : (isImport ? "Double-check the details, then save it to the cookbook" : "Grow your family cookbook");
+  var sub = isEdit ? "Tweak it to match how you actually make it" : (isImport ? "Double-check the details, then save it to the cookbook" : "Add a recipe to the cookbook");
 
   var html = '<div class="overlay" onclick="if(event.target===this) closeModal()"><div class="modal">'+
     '<button class="modal-close" onclick="closeModal()">×</button>'+
@@ -2593,17 +2628,25 @@ function renderRecipeFormModal(){
     '<div class="modal-head"><h2>'+heading+'</h2>'+
     '<div class="rcard-meta">'+sub+'</div></div>'+
     '<div class="modal-body"><form id="recipe-form">'+
-    '<div class="field"><label>Recipe name</label><input type="text" name="rname" value="'+escapeHtml(nameVal)+'" required></div>'+
+    '<div class="field"><label>Recipe name</label><input type="text" name="rname" value="'+escapeHtml(nameVal)+'" required autocomplete="off"></div>'+
     '<div class="field" style="display:flex;gap:12px;">'+
       '<div style="flex:1;"><label>Time</label><input type="text" name="rtime" placeholder="e.g. 30 min" value="'+escapeHtml(timeVal)+'"></div>'+
       '<div style="flex:1;"><label>Servings</label><input type="number" name="rservings" placeholder="4" min="1" value="'+escapeHtml(servingsVal)+'"></div>'+
     '</div>'+
     '<div class="field"><label>Tags (comma separated)</label><input type="text" name="rtags" placeholder="e.g. Mexican, Quick" value="'+escapeHtml(tagsVal)+'"></div>'+
-    '<div class="field checkbox-row"><input type="checkbox" name="rkid" id="rkid" '+kidChecked+'><label for="rkid" style="margin:0;">Kid-friendly</label></div>'+
-    '<div class="field"><label>Ingredients</label><div id="ing-rows">'+rowsHtml+'</div>'+
-      '<button type="button" class="btn secondary" onclick="addIngRow()" style="margin-top:4px;">+ Add ingredient line</button></div>'+
-    '<div class="field"><label>Steps (one per line)</label><textarea name="rsteps" placeholder="Brown the sausage...\nAdd the broccoli...">'+escapeHtml(stepsVal)+'</textarea></div>'+
-    '<div class="field"><label>Toddler note (optional)</label><input type="text" name="rkidnote" placeholder="e.g. Serve their portion plain" value="'+escapeHtml(kidNoteVal)+'"></div>'+
+    '<div class="field checkbox-row"><input type="checkbox" name="rkid" id="rkid" '+kidChecked+'><label for="rkid" style="margin:0;font-weight:400;text-transform:none;letter-spacing:0;font-size:14px;">Kid-friendly</label></div>'+
+    '<div class="field">'+
+      '<label>Ingredients <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;opacity:.7;">— grab ⠿ to reorder</span></label>'+
+      '<div id="ing-rows">'+rowsHtml+'</div>'+
+      '<button type="button" class="btn secondary" onclick="addIngRow()" style="margin-top:6px;font-size:12px;padding:7px 12px;min-height:36px;">+ Add ingredient</button>'+
+    '</div>'+
+    '<div class="field">'+
+      '<label>Steps <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;opacity:.7;">— grab ⠿ to reorder</span></label>'+
+      '<div id="step-rows">'+stepsHtml+'</div>'+
+      '<button type="button" class="btn secondary" onclick="addStepRow()" style="margin-top:6px;font-size:12px;padding:7px 12px;min-height:36px;">+ Add step</button>'+
+    '</div>'+
+    '<div class="field"><label>Toddler note <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;opacity:.7;">(optional)</span></label>'+
+      '<input type="text" name="rkidnote" placeholder="e.g. Serve their portion plain before adding sauce" value="'+escapeHtml(kidNoteVal)+'"></div>'+
     '<div class="modal-actions"><button type="submit" class="btn">Save recipe</button><button type="button" class="btn secondary" onclick="closeModal()">Cancel</button></div>'+
     '</form></div></div></div></div>';
   return html;
@@ -2636,9 +2679,74 @@ function renderImportModal(){
   return html;
 }
 
+function setupRowDrag(containerId){
+  var container = document.getElementById(containerId);
+  if (!container) return;
+  // Remove any old listeners by cloning the node
+  var fresh = container.cloneNode(true);
+  container.parentNode.replaceChild(fresh, container);
+  container = fresh;
+
+  var dragging = null;
+  var placeholder = null;
+
+  function liveRows(){
+    return Array.from(container.children).filter(function(el){
+      return (el.classList.contains("ing-row")||el.classList.contains("step-row")) && el!==placeholder;
+    });
+  }
+
+  container.addEventListener("pointerdown", function(e){
+    var handle = e.target.closest(".drag-handle");
+    if (!handle) return;
+    var row = handle.closest(".ing-row,.step-row");
+    if (!row || !container.contains(row)) return;
+    e.preventDefault();
+    dragging = row;
+    dragging.classList.add("dragging");
+    placeholder = document.createElement("div");
+    placeholder.className = "drop-placeholder";
+    container.insertBefore(placeholder, dragging);
+    handle.setPointerCapture(e.pointerId);
+  },{passive:false});
+
+  container.addEventListener("pointermove", function(e){
+    if (!dragging || !placeholder) return;
+    e.preventDefault();
+    var rows = liveRows();
+    var y = e.clientY;
+    var insertBefore = null;
+    for (var i=0;i<rows.length;i++){
+      var rect = rows[i].getBoundingClientRect();
+      if (y < rect.top + rect.height*0.5){ insertBefore=rows[i]; break; }
+    }
+    if (insertBefore){
+      if (placeholder.nextSibling!==insertBefore) container.insertBefore(placeholder,insertBefore);
+    } else {
+      if (container.lastChild!==placeholder) container.appendChild(placeholder);
+    }
+  },{passive:false});
+
+  function endDrag(){
+    if (!dragging) return;
+    dragging.classList.remove("dragging");
+    if (placeholder && placeholder.parentNode){
+      placeholder.parentNode.insertBefore(dragging, placeholder);
+      placeholder.remove();
+    }
+    dragging=null; placeholder=null;
+  }
+  container.addEventListener("pointerup", endDrag);
+  container.addEventListener("pointercancel", endDrag);
+}
+
 function attachFormHandler(){
   var f = document.getElementById("recipe-form");
-  if (f) f.addEventListener("submit", submitRecipeForm);
+  if (f){
+    f.addEventListener("submit", submitRecipeForm);
+    setupRowDrag("ing-rows");
+    setupRowDrag("step-rows");
+  }
   var af = document.getElementById("auth-form");
   if (af) af.addEventListener("submit", submitAuthForm);
 }
