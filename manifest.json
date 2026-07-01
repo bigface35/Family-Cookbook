@@ -1,13 +1,13 @@
 {
-  "name": "Minear Family Recipes",
-  "short_name": "Minear Recipes",
-  "description": "The Minear family recipe book, weekly planner, and shopping list.",
+  "name": "Mise",
+  "short_name": "Mise",
+  "description": "Mise — your shared kitchen. Recipes, weekly planning, and shopping lists.",
   "start_url": "/Family-Cookbook/",
   "scope": "/Family-Cookbook/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#E8DEC6",
-  "theme_color": "#E8DEC6",
+  "background_color": "#0d0d12",
+  "theme_color": "#0d0d12",
   "icons": [
     {
       "src": "/Family-Cookbook/icon-192.png",
