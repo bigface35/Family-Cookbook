@@ -1475,10 +1475,15 @@ function submitAuthForm(ev){
 
 /* ---- Recipe sharing: public toggle, share links, save-a-copy, migration ---- */
 async function setRecipePublic(id, isPublic){
+  // Optimistic local update — flips the checkbox immediately without waiting
+  // for the Firestore round-trip. Reverts on failure.
+  var local = state.myRecipes.filter(function(r){ return r.id===id; })[0];
+  if (local){ local.isPublic = isPublic; render(); }
   try{
     await db.collection("recipes").doc(id).update({isPublic: isPublic});
     return true;
   }catch(e){
+    if (local){ local.isPublic = !isPublic; render(); }
     console.error("Couldn't update sharing:", e);
     return false;
   }
@@ -1522,11 +1527,34 @@ async function ensureStarterShareDoc(starterId){
   return ref.id;
 }
 async function toggleStarterPublic(starterId, isPublic){
-  // Don't call render() — let the onSnapshot re-render once Firestore confirms.
-  // Calling render() early was causing the checkbox to snap back.
-  var docId = await ensureStarterShareDoc(starterId);
-  if (!docId) return;
-  await setRecipePublic(docId, isPublic);
+  if (isPublic){
+    var existingId = findStarterShareDocId(starterId);
+    if (existingId){
+      // Doc exists — optimistic update handles the UI instantly
+      await setRecipePublic(existingId, true);
+    } else {
+      // First time sharing: create the doc ALREADY MARKED PUBLIC in one write.
+      // The old approach (create private, then update) fired a snapshot between
+      // the two writes that re-rendered the modal with an unchecked box.
+      var r = findRecipe(starterId);
+      if (!r) return;
+      var ref = await db.collection("recipes").add({
+        name:r.name, tags:r.tags||[], kidFriendly:!!r.kidFriendly, kidNote:r.kidNote||"",
+        time:r.time||"", servings:r.servings||4, ingredients:r.ingredients||[], steps:r.steps||[],
+        ownerId: state.currentUser.uid,
+        ownerName: state.currentUser.displayName || state.currentUser.email,
+        isPublic: true,
+        sourceStarterId: starterId,
+        createdAt: new Date().toISOString()
+      });
+      state.starterShares[starterId] = ref.id;
+      saveStarterShares();
+    }
+  } else {
+    // Unpublish — optimistic update in setRecipePublic handles the UI
+    var docId = findStarterShareDocId(starterId);
+    if (docId) await setRecipePublic(docId, false);
+  }
 }
 async function shareStarterLink(starterId){
   var docId = await ensureStarterShareDoc(starterId);
