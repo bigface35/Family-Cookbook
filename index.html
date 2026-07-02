@@ -1383,7 +1383,23 @@ function attachUserListeners(uid){
       savePrivateState();
       stapleLoaded = true;
     }
-    state.syncStatus = snap.metadata.fromCache ? "offline" : "synced";
+    if (snap.metadata.fromCache){
+      // Don't immediately show "Offline" — Firestore always serves from cache
+      // first on every cold load before the server responds. Only show the
+      // warning if we're still on cache after 6 seconds (genuine offline/rules issue).
+      if (!window._offlineTimer){
+        window._offlineTimer = setTimeout(function(){
+          if (state.syncStatus !== "synced"){
+            state.syncStatus = "offline";
+            render();
+          }
+          window._offlineTimer = null;
+        }, 6000);
+      }
+    } else {
+      if (window._offlineTimer){ clearTimeout(window._offlineTimer); window._offlineTimer = null; }
+      state.syncStatus = "synced";
+    }
     if (!state.formState) render();
   }, function(err){
     console.error("Private state sync error:", err);
@@ -2467,16 +2483,17 @@ function renderCommunityTab(){
 }
 
 function renderHero(){
-  var statusMap = {
-    connecting:["Connecting…","#C99A3E"],
-    synced:["Synced with your family","#566B51"],
-    offline:["Offline — saved on this device, will sync later","#c04535"],
-    error:["Sync error — check your connection","#c04535"]
-  };
-  var s = statusMap[state.syncStatus] || statusMap.connecting;
+  // Only show a status line when something needs attention.
+  // "connecting" and "synced" are silent — no need to narrate normal operation.
+  var statusLine = "";
+  if (state.syncStatus === "offline"){
+    statusLine = '<p style="margin-top:8px;font-size:11px;letter-spacing:.03em;color:#c04535;">● Offline — changes will sync when reconnected</p>';
+  } else if (state.syncStatus === "error"){
+    statusLine = '<p style="margin-top:8px;font-size:11px;letter-spacing:.03em;color:#c04535;">● Sync error — check your connection</p>';
+  }
   return '<div class="hero"><h1>Mise</h1>'+
     '<p>everything in its place</p>'+
-    '<p style="margin-top:8px;font-size:11px;letter-spacing:.03em;color:'+s[1]+';">● '+s[0]+'</p>'+
+    statusLine+
     '</div>';
 }
 
