@@ -3,13 +3,16 @@
    Cache-first for the app shell; network-first for Firebase.
    Update CACHE_VERSION when deploying changes to bust the cache.
    ========================================================= */
-var CACHE_VERSION = 'v2';
+var CACHE_VERSION = 'v3';
 var CACHE_NAME = 'minear-recipes-' + CACHE_VERSION;
 
 /* Files to cache for offline app-shell use */
 var SHELL_FILES = [
   '/Family-Cookbook/',
-  '/Family-Cookbook/index.html'
+  '/Family-Cookbook/index.html',
+  '/Family-Cookbook/icon-192.png',
+  '/Family-Cookbook/icon-512.png',
+  '/Family-Cookbook/manifest.json'
 ];
 
 /* ---- Install: pre-cache the app shell ---- */
