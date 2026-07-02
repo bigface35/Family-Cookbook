@@ -1295,7 +1295,7 @@ var state = {
   formState:null,     // {mode:'add'|'edit', recipeId, ingRows}
   importMode:false,   // whether the "Import a recipe" modal is open
   importDraft:null,   // parsed {name, ingredients, steps, ...} waiting to prefill the add form
-  syncStatus:"connecting", // "connecting" | "synced" | "offline" | "error"
+  syncStatus:"connecting", // kept for legacy reference only — no longer displayed
 
   // --- accounts & sharing ---
   currentUser:null,        // {uid, email, displayName} once signed in
@@ -1383,27 +1383,9 @@ function attachUserListeners(uid){
       savePrivateState();
       stapleLoaded = true;
     }
-    if (snap.metadata.fromCache){
-      // Don't immediately show "Offline" — Firestore always serves from cache
-      // first on every cold load before the server responds. Only show the
-      // warning if we're still on cache after 6 seconds (genuine offline/rules issue).
-      if (!window._offlineTimer){
-        window._offlineTimer = setTimeout(function(){
-          if (state.syncStatus !== "synced"){
-            state.syncStatus = "offline";
-            render();
-          }
-          window._offlineTimer = null;
-        }, 6000);
-      }
-    } else {
-      if (window._offlineTimer){ clearTimeout(window._offlineTimer); window._offlineTimer = null; }
-      state.syncStatus = "synced";
-    }
     if (!state.formState) render();
   }, function(err){
     console.error("Private state sync error:", err);
-    state.syncStatus = "error";
     render();
   });
   activeUnsubscribers.push(unsubState);
@@ -2483,17 +2465,8 @@ function renderCommunityTab(){
 }
 
 function renderHero(){
-  // Only show a status line when something needs attention.
-  // "connecting" and "synced" are silent — no need to narrate normal operation.
-  var statusLine = "";
-  if (state.syncStatus === "offline"){
-    statusLine = '<p style="margin-top:8px;font-size:11px;letter-spacing:.03em;color:#c04535;">● Offline — changes will sync when reconnected</p>';
-  } else if (state.syncStatus === "error"){
-    statusLine = '<p style="margin-top:8px;font-size:11px;letter-spacing:.03em;color:#c04535;">● Sync error — check your connection</p>';
-  }
   return '<div class="hero"><h1>Mise</h1>'+
     '<p>everything in its place</p>'+
-    statusLine+
     '</div>';
 }
 
