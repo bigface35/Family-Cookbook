@@ -1528,14 +1528,30 @@ async function ensureStarterShareDoc(starterId){
 }
 async function toggleStarterPublic(starterId, isPublic){
   if (isPublic){
+    // Check local state first (fast path)
     var existingId = findStarterShareDocId(starterId);
+
+    // If not found locally, query Firestore directly before creating.
+    // This prevents duplicates when state.myRecipes is stale or empty
+    // (e.g. security rules were previously blocking the listener query).
+    if (!existingId){
+      try{
+        var qs = await db.collection("recipes")
+          .where("ownerId","==",state.currentUser.uid)
+          .where("sourceStarterId","==",starterId)
+          .get();
+        if (!qs.empty){
+          existingId = qs.docs[0].id;
+          state.starterShares[starterId] = existingId;
+          saveStarterShares();
+        }
+      }catch(e){ /* rules may not allow this yet — fall through to create */ }
+    }
+
     if (existingId){
-      // Doc exists — optimistic update handles the UI instantly
       await setRecipePublic(existingId, true);
     } else {
-      // First time sharing: create the doc ALREADY MARKED PUBLIC in one write.
-      // The old approach (create private, then update) fired a snapshot between
-      // the two writes that re-rendered the modal with an unchecked box.
+      // Genuinely no share doc — create it already marked public (one write, no race)
       var r = findRecipe(starterId);
       if (!r) return;
       var ref = await db.collection("recipes").add({
@@ -1551,8 +1567,21 @@ async function toggleStarterPublic(starterId, isPublic){
       saveStarterShares();
     }
   } else {
-    // Unpublish — optimistic update in setRecipePublic handles the UI
+    // Unpublish — check local state then fall back to Firestore query
     var docId = findStarterShareDocId(starterId);
+    if (!docId){
+      try{
+        var qs2 = await db.collection("recipes")
+          .where("ownerId","==",state.currentUser.uid)
+          .where("sourceStarterId","==",starterId)
+          .get();
+        if (!qs2.empty){
+          docId = qs2.docs[0].id;
+          state.starterShares[starterId] = docId;
+          saveStarterShares();
+        }
+      }catch(e){}
+    }
     if (docId) await setRecipePublic(docId, false);
   }
 }
