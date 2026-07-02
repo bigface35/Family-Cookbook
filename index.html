@@ -1487,11 +1487,27 @@ async function setRecipePublic(id, isPublic){
 // documents, so they can't be shared as-is. The first time someone shares one,
 // we create a real owned copy behind the scenes — this does NOT touch or replace
 // the recipe in their own cookbook, it just gives friends something fetchable.
-async function ensureStarterShareDoc(starterId){
-  var existingId = state.starterShares[starterId];
-  if (existingId && state.myRecipes.some(function(r){ return r.id===existingId; })){
-    return existingId;
+// Finds the Firestore share doc for a starter recipe.
+// Checks starterShares mapping first, then scans myRecipes for
+// a doc with sourceStarterId matching — so it works even if
+// starterShares got lost (different device, cleared storage, etc.)
+function findStarterShareDocId(starterId){
+  var knownId = state.starterShares[starterId];
+  if (knownId && state.myRecipes.some(function(r){ return r.id===knownId; })) return knownId;
+  // Heal a missing mapping by scanning myRecipes
+  var found = state.myRecipes.filter(function(r){ return r.sourceStarterId===starterId; })[0];
+  if (found){
+    state.starterShares[starterId] = found.id;
+    saveStarterShares();
+    return found.id;
   }
+  return null;
+}
+
+async function ensureStarterShareDoc(starterId){
+  var existingId = findStarterShareDocId(starterId);
+  if (existingId) return existingId;
+  // No share doc yet — create one from the current recipe content
   var base = mergedStarter(STARTER_RECIPES.filter(function(s){return s.id===starterId;})[0]);
   if (!base) return null;
   var doc = {
@@ -1506,9 +1522,8 @@ async function ensureStarterShareDoc(starterId){
   return ref.id;
 }
 async function toggleStarterPublic(starterId, isPublic){
-  // Don't call render() here — the onSnapshot listener will re-render once
-  // Firestore confirms the change, ensuring the checkbox shows the correct state.
-  // Calling render() early was causing the checkbox to snap back to its old value.
+  // Don't call render() — let the onSnapshot re-render once Firestore confirms.
+  // Calling render() early was causing the checkbox to snap back.
   var docId = await ensureStarterShareDoc(starterId);
   if (!docId) return;
   await setRecipePublic(docId, isPublic);
@@ -1518,26 +1533,70 @@ async function shareStarterLink(starterId){
   if (!docId) return;
   copyShareLink(docId, "share-link-status-"+starterId);
 }
-// Push the current (possibly edited) version of a starter recipe
-// back to its public share doc so the community sees the latest.
-async function refreshStarterShareDoc(starterId){
-  var docId = state.starterShares[starterId];
-  if (!docId) return;
+
+// Replaces the Community share doc content with the current recipe version.
+// Uses set() (full replacement) not update() (partial patch) to guarantee
+// stale fields can't survive. Preserves the doc ID so existing share links work.
+async function pushStarterEdits(starterId){
+  var statusEl = document.getElementById("share-push-status-"+starterId);
+  function setStatus(msg, color){ if (statusEl){ statusEl.textContent=msg; statusEl.style.color=color||""; } }
+
+  var docId = findStarterShareDocId(starterId);
+  if (!docId){
+    setStatus("No Community version found — share it first", "var(--red)");
+    return;
+  }
   var r = findRecipe(starterId);
   if (!r) return;
-  var statusEl = document.getElementById("share-refresh-status-"+starterId);
-  function setStatus(msg){ if (statusEl) statusEl.textContent = msg; }
-  setStatus("Updating…");
+
+  // Preserve the current isPublic flag from the existing doc
+  var existingDoc = state.myRecipes.filter(function(x){ return x.id===docId; })[0];
+  var keepPublic = existingDoc ? !!existingDoc.isPublic : false;
+
+  setStatus("Replacing…");
   try{
-    await db.collection("recipes").doc(docId).update({
+    await db.collection("recipes").doc(docId).set({
       name:r.name, tags:r.tags||[], kidFriendly:!!r.kidFriendly, kidNote:r.kidNote||"",
-      time:r.time||"", servings:r.servings||4, ingredients:r.ingredients||[], steps:r.steps||[]
+      time:r.time||"", servings:r.servings||4, ingredients:r.ingredients||[], steps:r.steps||[],
+      ownerId: state.currentUser.uid, ownerName: state.currentUser.displayName || state.currentUser.email,
+      isPublic: keepPublic, sourceStarterId: starterId,
+      updatedAt: new Date().toISOString()
     });
-    setStatus("Updated ✓");
-    setTimeout(function(){ setStatus(""); }, 2500);
+    setStatus("✓ Community version updated", "var(--green)");
+    setTimeout(function(){ setStatus(""); }, 3000);
   }catch(e){
-    setStatus("Couldn't update — try again");
-    console.error("Couldn't refresh share doc:", e);
+    setStatus("Failed — check your connection", "var(--red)");
+    console.error("pushStarterEdits failed:", e);
+  }
+}
+
+// Deletes the current Community share doc and creates a fresh one from
+// the current recipe. Share links change (old ones break). Used as a
+// last resort when something is badly out of sync.
+async function deleteAndRepublishStarter(starterId){
+  var statusEl = document.getElementById("share-push-status-"+starterId);
+  function setStatus(msg, color){ if (statusEl){ statusEl.textContent=msg; statusEl.style.color=color||""; } }
+
+  var docId = findStarterShareDocId(starterId);
+  setStatus("Deleting old version…");
+  try{
+    if (docId) await db.collection("recipes").doc(docId).delete();
+    delete state.starterShares[starterId];
+    saveStarterShares();
+  }catch(e){
+    setStatus("Couldn't delete — try again", "var(--red)");
+    console.error("delete failed:", e);
+    return;
+  }
+  setStatus("Creating fresh version…");
+  try{
+    var newId = await ensureStarterShareDoc(starterId);
+    await setRecipePublic(newId, true);
+    setStatus("✓ Re-published fresh", "var(--green)");
+    setTimeout(function(){ setStatus(""); }, 3000);
+  }catch(e){
+    setStatus("Deleted but couldn't re-publish — try sharing again", "var(--red)");
+    console.error("republish failed:", e);
   }
 }
 function getShareLink(id){
@@ -2479,34 +2538,44 @@ function renderRecipeModal(r){
   if (owned){
     html += '<div class="sharing-section">'+
       '<label>Sharing</label>'+
-      '<div class="checkbox-row" style="margin-bottom:10px;">'+
+      '<div class="checkbox-row" style="margin-bottom:12px;">'+
       '<input type="checkbox" id="pub-'+r.id+'" '+(r.isPublic?"checked":"")+' onchange="setRecipePublic(\''+r.id+'\', this.checked)">'+
-      '<label for="pub-'+r.id+'" style="margin:0;">'+(r.isPublic?'🌐 Public — visible to everyone in Community':'Make public — share in the Community tab')+'</label>'+
+      '<label for="pub-'+r.id+'" style="margin:0;font-size:14px;font-weight:400;text-transform:none;letter-spacing:0;">'+(r.isPublic?'🌐 Public — visible to everyone in Community':'Make public — share in the Community tab')+'</label>'+
       '</div>'+
-      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'+
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">'+
       '<button type="button" class="btn secondary" style="font-size:12px;padding:7px 12px;min-height:36px;" onclick="copyShareLink(\''+r.id+'\')">Copy share link</button>'+
       '<span id="share-link-status-'+r.id+'" style="font-size:12px;color:var(--amber-lo);"></span>'+
       '</div>'+
-      '<div style="font-size:12px;color:var(--text-muted);margin-top:8px;">Anyone with the link can view and save their own copy. If you edit and save this recipe, the Community listing updates automatically — friends who already saved a copy keep their version.</div>'+
+      '<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">✓ When you save edits to this recipe, the Community listing updates automatically. Friends who\'ve already saved a copy keep their own version.</div>'+
       '</div>';
   } else if (isStarter){
-    var hasShareDoc = !!starterShareDocId;
+    // Use the heal-aware lookup so the button shows even if starterShares mapping is missing
+    var liveShareDocId = findStarterShareDocId(r.id);
+    var hasShareDoc = !!liveShareDocId;
     html += '<div class="sharing-section">'+
       '<label>Sharing</label>'+
-      '<div class="checkbox-row" style="margin-bottom:10px;">'+
+      '<div class="checkbox-row" style="margin-bottom:12px;">'+
       '<input type="checkbox" id="pub-starter-'+r.id+'" '+(starterIsPublic?"checked":"")+' onchange="toggleStarterPublic(\''+r.id+'\', this.checked)">'+
-      '<label for="pub-starter-'+r.id+'" style="margin:0;">'+(starterIsPublic?'🌐 Public — visible to everyone in Community':'Make public — share in the Community tab')+'</label>'+
+      '<label for="pub-starter-'+r.id+'" style="margin:0;font-size:14px;font-weight:400;text-transform:none;letter-spacing:0;">'+(starterIsPublic?'🌐 Public — visible to everyone in Community':'Make public — share in the Community tab')+'</label>'+
       '</div>'+
-      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">'+
+      // Share link row
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">'+
       '<button type="button" class="btn secondary" style="font-size:12px;padding:7px 12px;min-height:36px;" onclick="shareStarterLink(\''+r.id+'\')">Copy share link</button>'+
       '<span id="share-link-status-'+r.id+'" style="font-size:12px;color:var(--amber-lo);"></span>'+
       '</div>'+
+      // Sync controls — always show once a share doc exists
       (hasShareDoc ?
-        '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'+
-        '<button type="button" class="btn secondary" style="font-size:12px;padding:7px 12px;min-height:36px;" onclick="refreshStarterShareDoc(\''+r.id+'\')">Push latest edits to Community</button>'+
-        '<span id="share-refresh-status-'+r.id+'" style="font-size:12px;color:var(--amber-lo);"></span>'+
-        '</div>' : '')+
-      '<div style="font-size:12px;color:var(--text-muted);margin-top:8px;">Sharing a built-in recipe creates a separate copy for friends to fetch — nothing in your own cookbook changes. If you\'ve edited this recipe, use "Push latest edits" to update what friends see.</div>'+
+        '<div style="border-top:1px solid var(--border-mid);padding-top:10px;margin-top:4px;">'+
+        '<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--amber-lo);margin-bottom:8px;">Sync with Community</div>'+
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">'+
+        '<button type="button" class="btn" style="font-size:12px;padding:7px 14px;min-height:36px;" onclick="pushStarterEdits(\''+r.id+'\')">Replace Community version with current</button>'+
+        '<span id="share-push-status-'+r.id+'" style="font-size:12px;"></span>'+
+        '</div>'+
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'+
+        '<button type="button" class="btn secondary" style="font-size:11px;padding:5px 10px;min-height:32px;opacity:.7;" onclick="if(confirm(\'This deletes the current Community version and creates a fresh one. Existing share links will break. Continue?\')) deleteAndRepublishStarter(\''+r.id+'\')">Delete &amp; re-publish fresh</button>'+
+        '</div>'+
+        '</div>'
+        : '<div style="font-size:12px;color:var(--text-muted);">Sharing a built-in recipe creates a Community copy. Nothing in your own cookbook changes.</div>')+
       '</div>';
   }
 
