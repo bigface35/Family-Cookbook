@@ -431,6 +431,14 @@ input[type=checkbox]{-webkit-appearance:checkbox;appearance:checkbox;}
 .staple-row input:focus{outline:none;border-color:var(--amber);}
 .small-x{background:none;border:none;color:var(--red);font-size:20px;cursor:pointer;min-width:36px;min-height:36px;padding:0;opacity:.7;}
 .small-x:hover{opacity:1;}
+.follow-btn{
+  font-family:'Libre Franklin',sans-serif;font-size:11px;font-weight:700;
+  background:none;border:1.5px solid var(--border-strong);color:var(--text-soft);
+  border-radius:999px;padding:4px 10px;cursor:pointer;white-space:nowrap;
+  flex-shrink:0;transition:all .12s;
+}
+.follow-btn:hover{border-color:var(--amber);color:var(--amber);}
+.follow-btn.following{background:var(--amber);border-color:var(--amber);color:var(--bg-deep);}
 .checkbox-row{display:flex;align-items:center;gap:8px;}
 .checkbox-row input[type=checkbox]{width:18px;height:18px;flex-shrink:0;accent-color:var(--amber);}
 
@@ -657,7 +665,7 @@ var STARTER_RECIPES = [
   },
   {
     id:"chicken-pot-pie", name:"Homemade Chicken Pot Pie",
-    tags:["American Comfort","Weekend Project"], kidFriendly:true, time:"1 hr 15 min", servings:6,
+    tags:["American","Weekend Project"], kidFriendly:true, time:"1 hr 15 min", servings:6,
     ingredients:[
       {amount:2,unit:"cup",name:"cooked, shredded chicken",category:"Meat & Seafood"},
       {amount:0.33,unit:"cup",name:"unsalted butter",category:"Dairy & Eggs"},
@@ -684,7 +692,7 @@ var STARTER_RECIPES = [
   },
   {
     id:"steak-bourbon-diane", name:"Steak with Bourbon Diane Sauce",
-    tags:["Steak","Date Night"], kidFriendly:false,
+    tags:["American"], kidFriendly:false,
     kidNote:"Skip the bourbon sauce for the toddler's plate and serve their portion of steak plain alongside buttered noodles or rice.",
     time:"40 min", servings:4,
     ingredients:[
@@ -797,7 +805,7 @@ var STARTER_RECIPES = [
   },
   {
     id:"teriyaki-salmon", name:"Teriyaki Salmon",
-    tags:["Japanese-Inspired","Quick","Seafood"], kidFriendly:true, time:"25 min", servings:4,
+    tags:["Asian","Quick","Seafood"], kidFriendly:true, time:"25 min", servings:4,
     ingredients:[
       {amount:4,unit:"whole",name:"salmon fillets",category:"Meat & Seafood"},
       {amount:0.33,unit:"cup",name:"soy sauce",category:"Condiments & Sauces"},
@@ -822,7 +830,7 @@ var STARTER_RECIPES = [
   },
   {
     id:"smash-burgers", name:"Smash Burgers",
-    tags:["American Comfort","Quick"], kidFriendly:true, time:"20 min", servings:6,
+    tags:["American","Quick"], kidFriendly:true, time:"20 min", servings:6,
     ingredients:[
       {amount:1.5,unit:"lb",name:"ground beef (80/20), divided into 6 balls",category:"Meat & Seafood"},
       {amount:null,unit:"to taste",name:"salt and pepper",category:"Spices & Seasonings"},
@@ -842,7 +850,7 @@ var STARTER_RECIPES = [
   },
   {
     id:"chicken-caesar-wraps", name:"Chicken Caesar Wraps",
-    tags:["American Comfort","Quick"], kidFriendly:true, time:"15 min", servings:4,
+    tags:["American","Quick"], kidFriendly:true, time:"15 min", servings:4,
     ingredients:[
       {amount:2,unit:"cup",name:"cooked, sliced chicken (grilled or rotisserie)",category:"Meat & Seafood"},
       {amount:1,unit:"whole",name:"head romaine, chopped",category:"Produce"},
@@ -859,7 +867,7 @@ var STARTER_RECIPES = [
   },
   {
     id:"sheet-pan-chicken-thighs", name:"Sheet Pan Chicken Thighs with Vegetables",
-    tags:["American Comfort","Sheet Pan"], kidFriendly:true, time:"50 min", servings:4,
+    tags:["American"], kidFriendly:true, time:"50 min", servings:4,
     ingredients:[
       {amount:8,unit:"whole",name:"bone-in, skin-on chicken thighs",category:"Meat & Seafood"},
       {amount:1,unit:"lb",name:"baby potatoes, halved",category:"Produce"},
@@ -906,7 +914,7 @@ var STARTER_RECIPES = [
   },
   {
     id:"steak-tips-rice", name:"Steak Tips with Rice",
-    tags:["Steak","Quick"], kidFriendly:true, time:"40 min (plus marinating)", servings:4,
+    tags:["American","Quick"], kidFriendly:true, time:"40 min (plus marinating)", servings:4,
     ingredients:[
       {amount:2,unit:"lb",name:"sirloin steak tips, cut into chunks",category:"Meat & Seafood"},
       {amount:0.25,unit:"cup",name:"soy sauce",category:"Condiments & Sauces"},
@@ -989,7 +997,7 @@ var STARTER_RECIPES = [
   },
   {
     id:"homemade-pizza", name:"Homemade Pizza",
-    tags:["Italian-American","Weekend Project"], kidFriendly:true, time:"2 hr (mostly rising)", servings:4,
+    tags:["Italian","Weekend Project"], kidFriendly:true, time:"2 hr (mostly rising)", servings:4,
     ingredients:[
       {amount:3.5,unit:"cup",name:"bread flour",category:"Pantry & Dry Goods"},
       {amount:2.25,unit:"tsp",name:"active dry yeast (1 packet)",category:"Pantry & Dry Goods"},
@@ -1010,7 +1018,7 @@ var STARTER_RECIPES = [
   },
   {
     id:"skin-on-thighs-roasted-veg", name:"Skin-On Thighs with Roasted Vegetables",
-    tags:["American Comfort","Sheet Pan"], kidFriendly:true, time:"50 min", servings:4,
+    tags:["American"], kidFriendly:true, time:"50 min", servings:4,
     ingredients:[
       {amount:8,unit:"whole",name:"bone-in, skin-on chicken thighs",category:"Meat & Seafood"},
       {amount:1,unit:"whole",name:"red onion, cut into wedges",category:"Produce"},
@@ -1030,7 +1038,7 @@ var STARTER_RECIPES = [
   },
   {
     id:"homemade-chicken-soup", name:"Homemade Chicken Soup",
-    tags:["American Comfort","Soup"], kidFriendly:true, time:"1 hr", servings:6,
+    tags:["American","Soup"], kidFriendly:true, time:"1 hr", servings:6,
     ingredients:[
       {amount:2,unit:"lb",name:"bone-in chicken thighs or breasts (or 1 whole chicken)",category:"Meat & Seafood"},
       {amount:8,unit:"cup",name:"chicken broth or water",category:"Pantry & Dry Goods"},
@@ -1054,7 +1062,7 @@ var STARTER_RECIPES = [
   },
   {
     id:"zuppa-toscana", name:"Zuppa Toscana",
-    tags:["Italian-American","Soup"], kidFriendly:true,
+    tags:["Italian","Soup"], kidFriendly:true,
     kidNote:"Scoop out a kale-free portion of broth, sausage, and potato for the toddler before stirring in the kale.",
     time:"40 min", servings:6,
     ingredients:[
@@ -1078,7 +1086,7 @@ var STARTER_RECIPES = [
   },
   {
     id:"general-tsos-chicken", name:"General Tso's Chicken",
-    tags:["Chinese-American"], kidFriendly:true,
+    tags:["Asian"], kidFriendly:true,
     kidNote:"Leave out the red pepper flakes for a mild version, or fry a few plain chicken pieces for the toddler before adding sauce.",
     time:"40 min", servings:4,
     ingredients:[
@@ -1108,7 +1116,7 @@ var STARTER_RECIPES = [
   },
   {
     id:"mongolian-beef", name:"Mongolian Beef",
-    tags:["Chinese-American","Quick"], kidFriendly:true, time:"30 min", servings:4,
+    tags:["Asian","Quick"], kidFriendly:true, time:"30 min", servings:4,
     ingredients:[
       {amount:1.5,unit:"lb",name:"flank steak, thinly sliced",category:"Meat & Seafood"},
       {amount:0.33,unit:"cup",name:"cornstarch, for coating",category:"Pantry & Dry Goods"},
@@ -1225,7 +1233,7 @@ var STARTER_RECIPES = [
   },
   {
     id:"homemade-mac-cheese", name:"Homemade Mac & Cheese",
-    tags:["American Comfort","Quick"], kidFriendly:true, time:"30 min", servings:6,
+    tags:["American","Quick"], kidFriendly:true, time:"30 min", servings:6,
     ingredients:[
       {amount:1,unit:"lb",name:"elbow macaroni or cavatappi",category:"Pantry & Dry Goods"},
       {amount:4,unit:"tbsp",name:"butter",category:"Dairy & Eggs"},
@@ -1247,7 +1255,7 @@ var STARTER_RECIPES = [
   },
   {
     id:"chicken-nuggets", name:"Homemade Chicken Nuggets",
-    tags:["American Comfort","Kid Favorite","Quick"], kidFriendly:true, time:"30 min", servings:4,
+    tags:["American","Quick"], kidFriendly:true, time:"30 min", servings:4,
     ingredients:[
       {amount:1.5,unit:"lb",name:"boneless, skinless chicken breast or tenders, cut into bite-size pieces",category:"Meat & Seafood"},
       {amount:1,unit:"cup",name:"flour",category:"Pantry & Dry Goods"},
@@ -1264,10 +1272,150 @@ var STARTER_RECIPES = [
       "Fry in 350°F oil until golden and cooked through, about 3-4 minutes per side — or bake at 425°F on a greased sheet pan, flipping halfway, 15-18 minutes — or air fry at 400°F for 10-12 minutes.",
       "Serve with ketchup or a favorite dipping sauce."
     ]
+  },
+
+  /* ── Cocktails ─────────────────────────────────────────── */
+  {
+    id:"old-fashioned", name:"Old Fashioned",
+    tags:["Cocktail","American","Quick"], kidFriendly:false, time:"5 min", servings:1,
+    ingredients:[
+      {amount:2,unit:"oz",name:"bourbon or rye whiskey",category:"Spirits & Mixers"},
+      {amount:1,unit:"tsp",name:"simple syrup (or 1 sugar cube + splash water)",category:"Spirits & Mixers"},
+      {amount:2,unit:"dashes",name:"Angostura bitters",category:"Spirits & Mixers"},
+      {amount:1,unit:"strip",name:"orange peel",category:"Produce"},
+      {amount:1,unit:"whole",name:"cocktail cherry (optional)",category:"Other"}
+    ],
+    steps:[
+      "Add simple syrup and bitters to a rocks glass. If using a sugar cube, muddle it with the bitters and a splash of water until dissolved.",
+      "Add a large ice cube and pour the bourbon over it.",
+      "Stir gently for about 30 seconds to chill and dilute.",
+      "Express an orange peel over the glass by twisting it skin-side down to release the oils, then rub around the rim and drop it in. Add a cherry if using."
+    ]
+  },
+  {
+    id:"margarita", name:"Margarita",
+    tags:["Cocktail","Mexican","Quick"], kidFriendly:false, time:"5 min", servings:1,
+    ingredients:[
+      {amount:2,unit:"oz",name:"blanco tequila",category:"Spirits & Mixers"},
+      {amount:1,unit:"oz",name:"fresh lime juice",category:"Produce"},
+      {amount:0.75,unit:"oz",name:"Cointreau or triple sec",category:"Spirits & Mixers"},
+      {amount:0.5,unit:"oz",name:"simple syrup (optional, to taste)",category:"Spirits & Mixers"},
+      {amount:null,unit:"to taste",name:"salt and lime wedge, for the rim and garnish",category:"Other"}
+    ],
+    steps:[
+      "Rub a lime wedge around the rim of a coupe or rocks glass and dip in salt.",
+      "Combine tequila, lime juice, Cointreau, and simple syrup in a shaker with ice.",
+      "Shake hard for 10–15 seconds until well chilled.",
+      "Strain into the prepared glass over fresh ice (rocks style) or straight up (coupe). Garnish with a lime wedge."
+    ]
+  },
+  {
+    id:"negroni", name:"Negroni",
+    tags:["Cocktail","Italian","Quick"], kidFriendly:false, time:"3 min", servings:1,
+    ingredients:[
+      {amount:1,unit:"oz",name:"gin",category:"Spirits & Mixers"},
+      {amount:1,unit:"oz",name:"Campari",category:"Spirits & Mixers"},
+      {amount:1,unit:"oz",name:"sweet vermouth",category:"Spirits & Mixers"},
+      {amount:1,unit:"strip",name:"orange peel",category:"Produce"}
+    ],
+    steps:[
+      "Combine gin, Campari, and sweet vermouth in a mixing glass with ice.",
+      "Stir for about 30 seconds until well chilled and slightly diluted.",
+      "Strain into a rocks glass over a large ice cube.",
+      "Express an orange peel over the top and use it as garnish."
+    ]
+  },
+  {
+    id:"whiskey-sour", name:"Whiskey Sour",
+    tags:["Cocktail","American","Quick"], kidFriendly:false, time:"5 min", servings:1,
+    ingredients:[
+      {amount:2,unit:"oz",name:"bourbon",category:"Spirits & Mixers"},
+      {amount:0.75,unit:"oz",name:"fresh lemon juice",category:"Produce"},
+      {amount:0.75,unit:"oz",name:"simple syrup",category:"Spirits & Mixers"},
+      {amount:0.5,unit:"oz",name:"egg white (optional, for froth)",category:"Dairy & Eggs"},
+      {amount:2,unit:"dashes",name:"Angostura bitters (optional garnish)",category:"Spirits & Mixers"}
+    ],
+    steps:[
+      "If using egg white, combine all ingredients in a shaker without ice and shake vigorously for 15 seconds (dry shake) to emulsify the egg white.",
+      "Add ice and shake hard for another 15 seconds.",
+      "If skipping egg white, just shake everything with ice from the start.",
+      "Strain into a rocks glass over ice or a chilled coupe straight up.",
+      "Add a few drops of bitters on top of the foam and swirl with a toothpick for a decorative pattern."
+    ]
+  },
+  {
+    id:"daiquiri", name:"Classic Daiquiri",
+    tags:["Cocktail","Quick"], kidFriendly:false, time:"5 min", servings:1,
+    ingredients:[
+      {amount:2,unit:"oz",name:"white rum",category:"Spirits & Mixers"},
+      {amount:1,unit:"oz",name:"fresh lime juice",category:"Produce"},
+      {amount:0.75,unit:"oz",name:"simple syrup",category:"Spirits & Mixers"}
+    ],
+    steps:[
+      "Combine rum, lime juice, and simple syrup in a shaker with ice.",
+      "Shake hard for 10–15 seconds until very cold.",
+      "Double-strain into a chilled coupe glass.",
+      "Garnish with a lime wheel or expressed lime peel."
+    ]
+  },
+  {
+    id:"aperol-spritz", name:"Aperol Spritz",
+    tags:["Cocktail","Italian","Quick"], kidFriendly:false, time:"3 min", servings:1,
+    ingredients:[
+      {amount:3,unit:"oz",name:"Prosecco",category:"Spirits & Mixers"},
+      {amount:2,unit:"oz",name:"Aperol",category:"Spirits & Mixers"},
+      {amount:1,unit:"oz",name:"soda water",category:"Spirits & Mixers"},
+      {amount:1,unit:"slice",name:"orange",category:"Produce"},
+      {amount:null,unit:"to taste",name:"ice",category:"Other"}
+    ],
+    steps:[
+      "Fill a large wine glass with ice.",
+      "Pour in the Prosecco first, then the Aperol, then a splash of soda water.",
+      "Give it a very gentle stir — just once or twice to combine without losing the bubbles.",
+      "Garnish with an orange slice."
+    ]
+  },
+  {
+    id:"mai-tai", name:"Mai Tai",
+    tags:["Cocktail","Tiki","Quick"], kidFriendly:false, time:"5 min", servings:1,
+    ingredients:[
+      {amount:1.5,unit:"oz",name:"aged Jamaican rum",category:"Spirits & Mixers"},
+      {amount:0.5,unit:"oz",name:"dark rum (float)",category:"Spirits & Mixers"},
+      {amount:0.75,unit:"oz",name:"fresh lime juice",category:"Produce"},
+      {amount:0.5,unit:"oz",name:"orange curaçao",category:"Spirits & Mixers"},
+      {amount:0.5,unit:"oz",name:"orgeat syrup",category:"Spirits & Mixers"},
+      {amount:null,unit:"to taste",name:"crushed ice",category:"Other"},
+      {amount:null,unit:"to taste",name:"mint sprig and lime wheel, to garnish",category:"Produce"}
+    ],
+    steps:[
+      "Combine the Jamaican rum, lime juice, curaçao, and orgeat in a shaker with ice.",
+      "Shake until very cold, about 15 seconds.",
+      "Strain into a double rocks glass or tiki mug filled with crushed ice.",
+      "Float the dark rum on top by pouring it over the back of a spoon.",
+      "Garnish with a sprig of mint and a lime wheel."
+    ]
+  },
+  {
+    id:"jungle-bird", name:"Jungle Bird",
+    tags:["Cocktail","Tiki","Quick"], kidFriendly:false, time:"5 min", servings:1,
+    ingredients:[
+      {amount:1.5,unit:"oz",name:"Jamaican rum",category:"Spirits & Mixers"},
+      {amount:0.75,unit:"oz",name:"Campari",category:"Spirits & Mixers"},
+      {amount:1.5,unit:"oz",name:"pineapple juice",category:"Spirits & Mixers"},
+      {amount:0.5,unit:"oz",name:"fresh lime juice",category:"Produce"},
+      {amount:0.5,unit:"oz",name:"simple syrup",category:"Spirits & Mixers"},
+      {amount:null,unit:"to taste",name:"pineapple wedge, to garnish",category:"Produce"}
+    ],
+    steps:[
+      "Combine all ingredients in a shaker with ice.",
+      "Shake hard for 10–15 seconds.",
+      "Strain into a rocks glass or tiki mug over fresh ice.",
+      "Garnish with a pineapple wedge."
+    ]
   }
 ];
 
-var CATEGORY_ORDER = ["Produce","Meat & Seafood","Dairy & Eggs","Bakery & Grains","Pantry & Dry Goods","Condiments & Sauces","Spices & Seasonings","Frozen","Other"];
+var CATEGORY_ORDER = ["Produce","Meat & Seafood","Dairy & Eggs","Bakery & Grains","Pantry & Dry Goods","Condiments & Sauces","Spices & Seasonings","Spirits & Mixers","Frozen","Other"];
 
 /* =========================================================
    STATE
@@ -1306,9 +1454,17 @@ var state = {
   publicRecipes:[],        // recipes anyone has marked public, across all accounts
   showMigrationBanner:false,
   migrationStatus:"",
-  sharedRecipeView:null,   // a recipe opened via a ?recipe= share link, before/without saving a copy
+  sharedRecipeView:null,
   pendingSharedRecipeId:null,
-  starterShares:{}         // starter recipe id -> Firestore doc id of this account's shareable clone of it
+  starterShares:{},
+
+  // Social
+  following:[],           // array of user UIDs being followed
+  communityFilter:"all",  // "all" | "following"
+
+  // Find New Recipe
+  findRecipeMode:false,
+  findRecipeType:"food"   // "food" | "cocktail"
 };
 
 function mergedStarter(base){
@@ -1379,6 +1535,7 @@ function attachUserListeners(uid){
       state.week = d.week || [];
       state.checks = d.checks || {};
       state.starterShares = d.starterShares || {};
+      state.following = d.following || [];
       state.staples = (d.staples && d.staples.length) ? d.staples : DEFAULT_STAPLES.slice();
       stapleLoaded = true;
     } else if (!stapleLoaded){
@@ -1420,7 +1577,8 @@ async function savePrivateState(){
       week: state.week,
       checks: state.checks,
       staples: state.staples,
-      starterShares: state.starterShares
+      starterShares: state.starterShares,
+      following: state.following
     }, {merge:true});
   }catch(e){ console.error("Save failed:", e); }
 }
@@ -1682,6 +1840,105 @@ async function deleteAndRepublishStarter(starterId){
     console.error("republish failed:", e);
   }
 }
+/* ---- Follow / unfollow ---- */
+function toggleFollow(uid){
+  var idx = state.following.indexOf(uid);
+  if (idx>-1) state.following.splice(idx,1);
+  else state.following.push(uid);
+  savePrivateState();
+  render();
+}
+function isFollowing(uid){ return state.following.indexOf(uid)>-1; }
+function setCommunityFilter(f){ state.communityFilter=f; render(); }
+
+/* ---- Find New Recipe (TheMealDB + TheCocktailDB) ---- */
+function openFindRecipe(){ state.findRecipeMode=true; state.modalRecipe=null; state.formState=null; render(); }
+function closeFindRecipe(){ state.findRecipeMode=false; render(); }
+function setFindRecipeType(t){ state.findRecipeType=t; render(); }
+
+function parseMealDBRecipe(meal){
+  var ingredients = [];
+  for (var i=1;i<=20;i++){
+    var name = (meal["strIngredient"+i]||"").trim();
+    var measure = (meal["strMeasure"+i]||"").trim();
+    if (!name) break;
+    var parsed = parseIngredientLine((measure+" "+name).trim());
+    if (parsed) ingredients.push(parsed);
+  }
+  var steps = normalizeInstructions(meal.strInstructions||"");
+  var tags = [];
+  if (meal.strCategory) tags.push(meal.strCategory);
+  if (meal.strArea) tags.push(meal.strArea);
+  return {name:meal.strMeal||"Imported Recipe", time:"", servings:4, tags:tags,
+    kidFriendly:false, kidNote:"", ingredients:ingredients, steps:steps};
+}
+function parseCocktailDBRecipe(drink){
+  var ingredients = [];
+  for (var i=1;i<=15;i++){
+    var name = (drink["strIngredient"+i]||"").trim();
+    var measure = (drink["strMeasure"+i]||"").trim();
+    if (!name) break;
+    var parsed = parseIngredientLine((measure+" "+name).trim());
+    if (parsed){
+      parsed.category = "Spirits & Mixers";
+      if (/lime|lemon|orange|mint|pineapple/i.test(name)) parsed.category = "Produce";
+      ingredients.push(parsed);
+    }
+  }
+  var steps = [];
+  if (drink.strInstructions) steps = drink.strInstructions.split(/\r?\n/).map(function(s){return s.trim();}).filter(Boolean);
+  if (!steps.length) steps = ["Combine ingredients in a shaker with ice, shake well, and strain into a glass."];
+  return {name:drink.strDrink||"Cocktail", time:"5 min", servings:1, tags:["Cocktail"],
+    kidFriendly:false, kidNote:"", ingredients:ingredients, steps:steps};
+}
+async function findRecipeFromWeb(query, isSurprise){
+  var statusEl = document.getElementById("find-recipe-status");
+  function setStatus(msg){ if (statusEl) statusEl.textContent = msg; }
+  var type = state.findRecipeType;
+  setStatus("Searching"+(isSurprise?" for something to surprise you":"")+"…");
+  // Proxies to handle CORS
+  var proxies = [
+    function(u){ return "https://api.allorigins.win/raw?url="+encodeURIComponent(u); },
+    function(u){ return "https://corsproxy.io/?url="+encodeURIComponent(u); }
+  ];
+  async function tryFetch(url){
+    for (var i=0;i<proxies.length;i++){
+      try{
+        var r = await fetch(proxies[i](url));
+        if (r.ok){ var t = await r.text(); if (t&&t.length>50) return JSON.parse(t); }
+      }catch(e){}
+    }
+    // Try direct (works if APIs have CORS headers)
+    try{ var r=await fetch(url); if(r.ok) return await r.json(); }catch(e){}
+    throw new Error("Network error");
+  }
+  try{
+    var draft;
+    if (type==="cocktail"){
+      var url = isSurprise||!query.trim()
+        ? "https://www.thecocktaildb.com/api/json/v1/1/random.php"
+        : "https://www.thecocktaildb.com/api/json/v1/1/search.php?s="+encodeURIComponent(query);
+      var data = await tryFetch(url);
+      if (!data.drinks||!data.drinks.length){ setStatus("No cocktail found — try different keywords."); return; }
+      draft = parseCocktailDBRecipe(data.drinks[0]);
+    } else {
+      var url = isSurprise||!query.trim()
+        ? "https://www.themealdb.com/api/json/v1/1/random.php"
+        : "https://www.themealdb.com/api/json/v1/1/search.php?s="+encodeURIComponent(query);
+      var data = await tryFetch(url);
+      if (!data.meals||!data.meals.length){ setStatus("No recipe found — try different keywords."); return; }
+      draft = parseMealDBRecipe(data.meals[0]);
+    }
+    state.importDraft = draft;
+    state.formState = {mode:"add", recipeId:null, ingRows:draft.ingredients.length||4};
+    state.findRecipeMode = false;
+    render();
+  }catch(e){
+    setStatus("Couldn't connect right now — check your connection and try again.");
+    console.error("Find recipe error:", e);
+  }
+}
+
 function getShareLink(id){
   var url = new URL(window.location.href);
   url.search = ""; url.hash = "";
@@ -1822,9 +2079,10 @@ var UNICODE_FRACTIONS = {"½":0.5,"⅓":0.333,"⅔":0.667,"¼":0.25,"¾":0.75,"�
 var QTY_PATTERN = "(\\d+\\s*[-–]\\s*\\d+|\\d+[½⅓⅔¼¾⅛⅜⅝⅞]|\\d+\\s+\\d+\\/\\d+|\\d+\\/\\d+|\\d+\\.\\d+|\\d+|[½⅓⅔¼¾⅛⅜⅝⅞])";
 
 var CATEGORY_KEYWORDS = [
+  ["Spirits & Mixers",["bourbon","rye","whiskey","gin","rum","tequila","vodka","mezcal","brandy","cognac","prosecco","champagne","campari","aperol","cointreau","triple sec","curaçao","orgeat","vermouth","bitters","angostura","simple syrup","ginger beer","soda water","tonic","grenadine","maraschino","amaro","liqueur","syrup","juice","pineapple juice"]],
   ["Meat & Seafood",["chicken","beef","pork","turkey","sausage","bacon","steak","salmon","shrimp","fish","ham","lamb","cod","tilapia","guanciale","pancetta","ribs","brisket","meat"]],
   ["Dairy & Eggs",["milk","cheese","butter","cream","yogurt","egg","parmesan","mozzarella","ricotta","cheddar","sour cream","ghee","pecorino"]],
-  ["Produce",["onion","garlic","carrot","celery","broccoli","tomato","potato","lemon","lime","pepper","cilantro","parsley","basil","spinach","kale","lettuce","scallion","ginger","mushroom","avocado","cabbage","cucumber","apple","banana","herb"]],
+  ["Produce",["onion","garlic","carrot","celery","broccoli","tomato","potato","lemon","lime","pepper","cilantro","parsley","basil","spinach","kale","lettuce","scallion","ginger","mushroom","avocado","cabbage","cucumber","apple","banana","herb","orange peel","lime juice","lemon juice"]],
   ["Bakery & Grains",["bread","tortilla","bun","crust","naan","baguette","croissant","roll","graham cracker"]],
   ["Spices & Seasonings",["salt","pepper","cumin","paprika","oregano","thyme","cinnamon","nutmeg","chili powder","curry powder","garam masala","turmeric","bay leaf","red pepper flake","spice","seasoning","vanilla extract"]],
   ["Condiments & Sauces",["soy sauce","ketchup","mustard","mayo","hot sauce","worcestershire","vinegar","pesto","salsa","hoisin","sriracha","sauce"]],
@@ -2403,6 +2661,8 @@ function render(){
   html += '</div>';
   if (state.formState){
     html += renderRecipeFormModal();
+  } else if (state.findRecipeMode){
+    html += renderFindRecipeModal();
   } else if (state.importMode){
     html += renderImportModal();
   } else if (state.modalRecipe){
@@ -2445,16 +2705,41 @@ function renderMigrationBanner(){
 }
 
 function renderCommunityTab(){
-  var list = state.publicRecipes.slice().sort(function(a,b){ return (a.name||"").localeCompare(b.name||""); });
+  var all = state.publicRecipes.slice().sort(function(a,b){ return (a.name||"").localeCompare(b.name||""); });
+  var list = state.communityFilter==="following"
+    ? all.filter(function(r){ return r.ownerId!==state.currentUser.uid && isFollowing(r.ownerId); })
+    : all;
+
+  // All / Following toggle
+  var html = '<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center;">'+
+    '<button class="chip'+(state.communityFilter==="all"?" active":"")+'" onclick="setCommunityFilter(\'all\')">All recipes '+all.length+'</button>'+
+    '<button class="chip'+(state.communityFilter==="following"?" active":"")+'" onclick="setCommunityFilter(\'following\')">Following</button>'+
+    '</div>';
+
   if (!list.length){
-    return '<div class="empty"><span class="big">No public recipes yet</span>When someone marks a recipe public, it\'ll show up here for anyone to save a copy of.</div>';
+    var msg = state.communityFilter==="following"
+      ? "No public recipes from people you follow yet. Browse All to find cooks to follow."
+      : "No public recipes yet — be the first to share one!";
+    return html + '<div class="empty"><span class="big">Nothing here yet</span>'+msg+'</div>';
   }
-  var html = '<div class="grid">';
+
+  html += '<div class="grid">';
   list.forEach(function(r){
-    var mine = r.ownerId === state.currentUser.uid;
+    var mine = r.ownerId===state.currentUser.uid;
+    var authorName = mine ? "You" : (r.ownerName || "Someone");
+    var following = !mine && isFollowing(r.ownerId);
     html += '<div class="rcard" onclick="openRecipe(\''+r.id+'\')">'+
-      '<div class="rcard-top"><div class="rcard-top-inner"><h3>'+escapeHtml(r.name)+'</h3>'+
-      '<div class="rcard-meta">'+escapeHtml(r.time||"")+' &middot; serves '+(r.servings||4)+' &middot; by '+escapeHtml(mine?"you":(r.ownerName||"someone"))+'</div></div></div>'+
+      '<div class="rcard-top"><div class="rcard-top-inner">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">'+
+      '<h3 style="flex:1;">'+escapeHtml(r.name)+'</h3>'+
+      (!mine ? '<button class="follow-btn'+(following?" following":"")+'" onclick="event.stopPropagation();toggleFollow(\''+r.ownerId+'\')" title="'+(following?"Unfollow":"Follow")+' '+escapeHtml(authorName)+'">'+(following?"✓ Following":"+ Follow")+'</button>' : '')+
+      '</div>'+
+      '<div class="rcard-meta" style="display:flex;align-items:center;gap:6px;">'+
+      '<span style="font-size:13px;font-weight:700;color:var(--amber-lo);">'+escapeHtml(authorName)+'</span>'+
+      '<span style="color:var(--text-muted);">·</span>'+
+      '<span>'+escapeHtml(r.time||"")+' · serves '+(r.servings||4)+'</span>'+
+      '</div>'+
+      '</div></div>'+
       '<div class="tagrow">'+
       (r.kidFriendly?'<span class="tag kid">Kid-Friendly</span>':'')+
       (r.tags||[]).map(function(t){return '<span class="tag">'+escapeHtml(t)+'</span>';}).join('')+
@@ -2465,6 +2750,30 @@ function renderCommunityTab(){
   });
   html += '</div>';
   return html;
+}
+
+function renderFindRecipeModal(){
+  var isFood = state.findRecipeType==="food";
+  return '<div class="overlay" onclick="if(event.target===this) closeFindRecipe()"><div class="modal">'+
+    '<button class="modal-close" onclick="closeFindRecipe()">×</button>'+
+    '<div class="modal-scroll">'+
+    '<div class="modal-head"><h2>Find a Recipe</h2>'+
+    '<div class="rcard-meta">Discover something new from across the internet</div></div>'+
+    '<div class="modal-body">'+
+    '<div style="display:flex;gap:8px;margin-bottom:18px;">'+
+    '<button class="chip'+(isFood?" active":"")+'" onclick="setFindRecipeType(\'food\')">🍽 Food</button>'+
+    '<button class="chip'+(!isFood?" active":"")+'" onclick="setFindRecipeType(\'cocktail\')">🍹 Cocktail</button>'+
+    '</div>'+
+    '<div class="field"><label>What are you in the mood for?</label>'+
+    '<input type="text" id="find-recipe-input" placeholder="'+(isFood?"e.g. chicken pasta, tacos, soup":"e.g. margarita, old fashioned, tiki")+'" style="margin-bottom:10px;">'+
+    '</div>'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">'+
+    '<button class="btn" onclick="findRecipeFromWeb(document.getElementById(\'find-recipe-input\').value, false)">Find Recipe →</button>'+
+    '<button class="btn secondary" onclick="findRecipeFromWeb(\'\', true)">🎲 Surprise Me</button>'+
+    '</div>'+
+    '<div id="find-recipe-status" style="font-size:13px;color:var(--text-soft);min-height:18px;"></div>'+
+    '<div style="font-size:12px;color:var(--text-muted);margin-top:10px;">Pulls real recipes from TheMealDB and TheCocktailDB. You\'ll get to review and edit before saving.</div>'+
+    '</div></div></div></div>';
 }
 
 function renderHero(){
@@ -2519,8 +2828,9 @@ function tabBtn(key,label,count){
 function renderRecipesTab(){
   var html = '<div class="toolbar">'+
     '<input class="search-input" type="text" placeholder="Search recipes…" value="'+escapeHtml(state.search)+'" oninput="setSearch(this.value)">'+
-    '<button class="btn secondary" onclick="openImportModal()">Import a recipe</button>'+
-    '<button class="btn" onclick="openAddForm()">+ Add a recipe</button>'+
+    '<button class="btn secondary" onclick="openFindRecipe()">✨ Find a Recipe</button>'+
+    '<button class="btn secondary" onclick="openImportModal()">Import</button>'+
+    '<button class="btn" onclick="openAddForm()">+ Add</button>'+
     '</div>';
 
   var noticeBits = [];
