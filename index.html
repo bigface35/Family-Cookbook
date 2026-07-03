@@ -1318,7 +1318,10 @@ function mergedStarter(base){
 }
 function allRecipes(){
   var starters = STARTER_RECIPES.map(mergedStarter).filter(function(r){ return !!r; });
-  return starters.concat(state.myRecipes);
+  // Exclude share docs (copies of built-in recipes created for public sharing).
+  // They have sourceStarterId set and belong in Community, not the owner's recipe list.
+  var ownedRecipes = state.myRecipes.filter(function(r){ return !r.sourceStarterId; });
+  return starters.concat(ownedRecipes);
 }
 function findRecipe(id){
   var all = allRecipes();
