@@ -313,25 +313,26 @@ input[type=checkbox]{-webkit-appearance:checkbox;appearance:checkbox;}
 .empty{text-align:center;padding:50px 20px;color:var(--text-soft);font-size:15px;}
 .empty .big{font-family:'Caveat',cursive;font-size:32px;color:var(--text);display:block;margin-bottom:6px;}
 
-/* ---- Modal / bottom sheet ---- */
+/* ---- Modal ---- */
 .overlay{
   position:fixed;inset:0;background:rgba(0,0,0,.7);
-  display:flex;align-items:flex-end;justify-content:center;
-  z-index:50;overflow:hidden;
+  display:flex;align-items:center;justify-content:center;
+  padding:32px 16px;
+  z-index:50;overflow-y:auto;
 }
 .modal{
   background:var(--bg-card);
   width:100%;max-width:680px;
-  border-radius:var(--radius) var(--radius) 0 0;
+  border-radius:var(--radius);
   border:1.5px solid var(--border-mid);
-  border-bottom:none;
   position:relative;
-  max-height:92dvh;max-height:92vh;
+  max-height:calc(100dvh - 64px);
+  max-height:calc(100vh - 64px);
   display:flex;flex-direction:column;
-  animation:slideUp .2s ease-out;
+  animation:fadeIn .18s ease-out;
 }
-@keyframes slideUp{from{transform:translateY(30px);opacity:0;}to{transform:translateY(0);opacity:1;}}
-.modal-scroll{overflow-y:auto;-webkit-overflow-scrolling:touch;flex:1;padding-bottom:calc(16px + var(--safe-bottom));}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+.modal-scroll{overflow-y:auto;-webkit-overflow-scrolling:touch;flex:1;}
 .modal-head{
   border-top:5px solid var(--amber);
   padding:18px 20px 12px;
@@ -563,17 +564,21 @@ input[type=checkbox]{-webkit-appearance:checkbox;appearance:checkbox;}
   .chip-row{flex-wrap:nowrap;}
   .grid{grid-template-columns:1fr;gap:12px;}
 
-  .overlay{align-items:flex-end;}
+  .overlay{
+    align-items:flex-end;
+    padding:0;
+    overflow:hidden;
+  }
   .modal{
     border-radius:20px 20px 0 0;
-    max-height:96dvh;max-height:96vh;
     border-left:1.5px solid var(--border-mid);
     border-right:1.5px solid var(--border-mid);
+    border-bottom:none;
+    max-height:96dvh;max-height:96vh;
+    animation:slideUp .2s ease-out;
   }
-  .modal-head::before{
-    content:'';display:block;width:36px;height:4px;
-    background:var(--border-strong);border-radius:99px;margin:0 auto 12px;
-  }
+  @keyframes slideUp{from{transform:translateY(30px);opacity:0;}to{transform:translateY(0);opacity:1;}}
+  .modal-scroll{padding-bottom:calc(16px + var(--safe-bottom));}
   .modal-head{padding:10px 16px 8px;}
   .modal-head h2{font-size:28px;}
   .modal-body{padding:4px 16px 16px;}
