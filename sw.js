@@ -1,12 +1,10 @@
 /* =========================================================
-   Minear Family Recipes — Service Worker
-   Cache-first for the app shell; network-first for Firebase.
-   Update CACHE_VERSION when deploying changes to bust the cache.
+   Mise — Service Worker
+   Bump CACHE_VERSION with every deploy to push updates to all users.
    ========================================================= */
-var CACHE_VERSION = 'v3';
-var CACHE_NAME = 'minear-recipes-' + CACHE_VERSION;
+var CACHE_VERSION = 'v5';
+var CACHE_NAME = 'mise-' + CACHE_VERSION;
 
-/* Files to cache for offline app-shell use */
 var SHELL_FILES = [
   '/Family-Cookbook/',
   '/Family-Cookbook/index.html',
@@ -15,74 +13,88 @@ var SHELL_FILES = [
   '/Family-Cookbook/manifest.json'
 ];
 
-/* ---- Install: pre-cache the app shell ---- */
+/* ---- Install: cache shell files, then activate immediately ---- */
 self.addEventListener('install', function(event){
   event.waitUntil(
     caches.open(CACHE_NAME).then(function(cache){
       return cache.addAll(SHELL_FILES);
     }).then(function(){
+      // Don't wait for existing tabs to close — take over right away.
       return self.skipWaiting();
     })
   );
 });
 
-/* ---- Activate: remove old caches ---- */
+/* ---- Activate: delete old caches, then claim all open tabs ---- */
 self.addEventListener('activate', function(event){
   event.waitUntil(
     caches.keys().then(function(keys){
       return Promise.all(
         keys.filter(function(key){
-          return key.startsWith('minear-recipes-') && key !== CACHE_NAME;
+          return key.startsWith('mise-') && key !== CACHE_NAME;
         }).map(function(key){
           return caches.delete(key);
         })
       );
     }).then(function(){
+      // Take control of every open tab immediately.
+      // The page listens for this and reloads to serve fresh content.
       return self.clients.claim();
     })
   );
 });
 
-/* ---- Fetch: cache-first for app shell, network-first for everything else ---- */
+/* ---- Fetch: network-first for HTML (always fresh), cache-first for assets ---- */
 self.addEventListener('fetch', function(event){
   var url = new URL(event.request.url);
 
-  // Skip non-GET requests
   if (event.request.method !== 'GET') return;
 
-  // Skip Firebase API requests (Firestore, Auth) — they handle their own caching
+  // Never intercept Firebase / Google requests
   if (url.hostname.includes('googleapis.com') ||
       url.hostname.includes('firebaseio.com') ||
-      url.hostname.includes('firestore.googleapis.com') ||
-      url.hostname.includes('identitytoolkit.googleapis.com') ||
       url.hostname.includes('gstatic.com') ||
       url.hostname.includes('fonts.googleapis.com') ||
-      url.hostname.includes('fonts.gstatic.com')) {
-    return; // let Firebase + Google Fonts handle themselves
+      url.hostname.includes('fonts.gstatic.com') ||
+      url.hostname.includes('anthropic.com') ||
+      url.hostname.includes('themealdb.com') ||
+      url.hostname.includes('thecocktaildb.com') ||
+      url.hostname.includes('allorigins.win') ||
+      url.hostname.includes('corsproxy.io')) {
+    return;
   }
 
-  // For our own app files: cache-first, then network, update cache in background
-  event.respondWith(
-    caches.match(event.request).then(function(cached){
-      var fetchPromise = fetch(event.request).then(function(networkResponse){
+  var isHTML = event.request.headers.get('Accept') &&
+               event.request.headers.get('Accept').includes('text/html');
+
+  if (isHTML){
+    // Network-first for HTML: users always get the freshest index.html.
+    event.respondWith(
+      fetch(event.request).then(function(networkResponse){
         if (networkResponse && networkResponse.status === 200){
-          var responseClone = networkResponse.clone();
           caches.open(CACHE_NAME).then(function(cache){
-            cache.put(event.request, responseClone);
+            cache.put(event.request, networkResponse.clone());
           });
         }
         return networkResponse;
       }).catch(function(){
-        return cached; // offline fallback to whatever is cached
-      });
-      return cached || fetchPromise;
-    })
-  );
-});
-
-/* ---- Handle ?tab= shortcuts from the manifest ---- */
-self.addEventListener('message', function(event){
-  if (event.data && event.data.type === 'SKIP_WAITING'){
-    self.skipWaiting();
+        return caches.match(event.request);
+      })
+    );
+  } else {
+    // Cache-first for images, icons, manifest etc.
+    event.respondWith(
+      caches.match(event.request).then(function(cached){
+        var fetchPromise = fetch(event.request).then(function(networkResponse){
+          if (networkResponse && networkResponse.status === 200){
+            caches.open(CACHE_NAME).then(function(cache){
+              cache.put(event.request, networkResponse.clone());
+            });
+          }
+          return networkResponse;
+        }).catch(function(){ return cached; });
+        return cached || fetchPromise;
+      })
+    );
   }
 });

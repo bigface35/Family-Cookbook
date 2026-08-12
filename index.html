@@ -3431,11 +3431,33 @@ function attachFormHandler(){
    ========================================================= */
 loadState();
 
-// Register service worker for PWA / offline support
+// Register service worker — auto-update for all users on every deploy
 if ('serviceWorker' in navigator){
   window.addEventListener('load', function(){
-    navigator.serviceWorker.register('sw.js').catch(function(e){
+    navigator.serviceWorker.register('sw.js').then(function(reg){
+      // When a new service worker finishes installing, reload immediately.
+      // The SW already calls skipWaiting() so it activates without waiting.
+      reg.addEventListener('updatefound', function(){
+        var newSW = reg.installing;
+        newSW.addEventListener('statechange', function(){
+          if (newSW.state === 'installed' && navigator.serviceWorker.controller){
+            // New version ready — reload to serve it
+            window.location.reload();
+          }
+        });
+      });
+    }).catch(function(e){
       console.log('SW registration failed:', e);
+    });
+
+    // Fires when a new SW takes over (skipWaiting + clients.claim).
+    // Reload to ensure the page is running the fresh version.
+    var refreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', function(){
+      if (!refreshing){
+        refreshing = true;
+        window.location.reload();
+      }
     });
   });
 }
