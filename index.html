@@ -65,7 +65,8 @@
 /* ---- Reset ---- */
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
 html,body{margin:0;height:100%;}
-body{overflow-x:hidden;background:var(--bg);}
+body{background:var(--bg);}
+/* overflow-x:hidden on body breaks position:fixed on iOS — apply to #app instead */
 button,input,select,textarea{font-family:inherit;-webkit-appearance:none;appearance:none;}
 input[type=checkbox]{-webkit-appearance:checkbox;appearance:checkbox;}
 
@@ -78,6 +79,7 @@ input[type=checkbox]{-webkit-appearance:checkbox;appearance:checkbox;}
   background-size:18px 18px;
   min-height:100%;
   padding:0 0 calc(70px + var(--safe-bottom)) 0;
+  overflow-x:hidden;
 }
 
 .wrap{max-width:980px;margin:0 auto;padding:0 16px;}
@@ -177,11 +179,12 @@ input[type=checkbox]{-webkit-appearance:checkbox;appearance:checkbox;}
 .search-input{
   font-family:'Libre Franklin',sans-serif;
   font-size:16px;
-  padding:10px 14px;
+  padding:9px 12px;
   border:1.5px solid var(--border-mid);
   border-radius:var(--radius);
   background:var(--bg-card);
-  flex:1 1 180px;
+  flex:1 1 140px;
+  max-width:240px;
   min-width:0;
   color:var(--text);
 }
@@ -494,8 +497,35 @@ input[type=checkbox]{-webkit-appearance:checkbox;appearance:checkbox;}
 .shop-item.checked .shop-amt{color:var(--text-muted);}
 .receipt-actions{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;justify-content:center;}
 
-/* ---- Auth gate ---- */
-.auth-wrap{max-width:400px;margin:0 auto;padding:24px 16px;}
+/* ---- Progress bar (fetch loading) ---- */
+.progress-bar{height:3px;background:var(--border-mid);border-radius:999px;overflow:hidden;margin:12px 0 4px;}
+.progress-bar-fill{height:100%;background:linear-gradient(90deg,var(--amber-lo),var(--amber),var(--amber-hi),var(--amber));background-size:200% 100%;border-radius:999px;animation:shimmer 1.2s linear infinite;}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+/* ---- Pantry ---- */
+.pantry-section{margin-top:18px;border-top:1px dashed var(--border-mid);padding-top:14px;}
+.pantry-title{font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:800;color:var(--sage);margin-bottom:8px;}
+.pantry-item{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:14px;color:var(--text-soft);border-bottom:1px solid var(--border);}
+.pantry-item:last-child{border-bottom:none;}
+.shop-item .pantry-btn{
+  margin-left:auto;flex-shrink:0;
+  background:none;border:1px solid var(--border-mid);
+  color:var(--text-muted);font-size:11px;font-weight:700;
+  border-radius:999px;padding:3px 8px;cursor:pointer;
+  transition:all .12s;
+}
+.shop-item .pantry-btn:hover{border-color:var(--sage);color:var(--sage);}
+.shop-item.in-pantry{opacity:.45;}
+.shop-item.in-pantry .pantry-btn{background:rgba(74,133,96,.15);border-color:var(--sage);color:var(--sage);}
+
+/* ---- One-time shopping items ---- */
+.quick-add-row{display:flex;gap:8px;margin-bottom:14px;}
+.quick-add-row input{flex:1;font-family:'Libre Franklin',sans-serif;font-size:15px;padding:9px 12px;border:1.5px solid var(--border-mid);border-radius:7px;background:var(--bg-raised);color:var(--text);min-height:42px;}
+.quick-add-row input:focus{outline:none;border-color:var(--amber);}
+.one-time-item{display:flex;align-items:center;gap:10px;padding:8px 0;font-size:15px;border-bottom:1px solid var(--border);min-height:44px;color:var(--text);}
+.one-time-item.checked{color:var(--text-muted);text-decoration:line-through;opacity:.5;}
+.one-time-item .remove-btn{margin-left:auto;background:none;border:none;color:var(--text-muted);font-size:18px;cursor:pointer;padding:4px;flex-shrink:0;}
+.one-time-item .remove-btn:hover{color:var(--red);}
 
 /* ---- Migration banner ---- */
 .migration-banner{
@@ -528,6 +558,9 @@ input[type=checkbox]{-webkit-appearance:checkbox;appearance:checkbox;}
     border-top:1px solid var(--border-mid);
     padding-bottom:var(--safe-bottom);
     z-index:40;
+    -webkit-transform:translate3d(0,0,0);
+    transform:translate3d(0,0,0);
+    will-change:transform;
   }
   .tab-bar-mobile button{
     flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
@@ -1465,7 +1498,12 @@ var state = {
 
   // Find New Recipe
   findRecipeMode:false,
-  findRecipeType:"food"   // "food" | "cocktail"
+  findRecipeType:"food",  // "food" | "cocktail"
+
+  // Shopping extras
+  oneTimeItems:[],   // [{id,name,checked}] — ad-hoc items for this week's list only
+  pantry:[],         // [{id,name,category}] — items stocked at home
+  showPantry:false   // expand/collapse pantry section in shopping
 };
 
 function mergedStarter(base){
@@ -1537,6 +1575,8 @@ function attachUserListeners(uid){
       state.checks = d.checks || {};
       state.starterShares = d.starterShares || {};
       state.following = d.following || [];
+      state.oneTimeItems = d.oneTimeItems || [];
+      state.pantry = d.pantry || [];
       state.staples = (d.staples && d.staples.length) ? d.staples : DEFAULT_STAPLES.slice();
       stapleLoaded = true;
     } else if (!stapleLoaded){
@@ -1579,7 +1619,9 @@ async function savePrivateState(){
       checks: state.checks,
       staples: state.staples,
       starterShares: state.starterShares,
-      following: state.following
+      following: state.following,
+      oneTimeItems: state.oneTimeItems,
+      pantry: state.pantry
     }, {merge:true});
   }catch(e){ console.error("Save failed:", e); }
 }
@@ -1893,24 +1935,32 @@ function parseCocktailDBRecipe(drink){
     kidFriendly:false, kidNote:"", ingredients:ingredients, steps:steps};
 }
 async function findRecipeFromWeb(query, isSurprise){
+  var type = state.findRecipeType;
+  var progressEl = document.getElementById("find-recipe-progress");
   var statusEl = document.getElementById("find-recipe-status");
   function setStatus(msg){ if (statusEl) statusEl.textContent = msg; }
-  var type = state.findRecipeType;
-  setStatus("Searching"+(isSurprise?" for something to surprise you":"")+"…");
-  // Proxies to handle CORS
-  var proxies = [
-    function(u){ return "https://api.allorigins.win/raw?url="+encodeURIComponent(u); },
-    function(u){ return "https://corsproxy.io/?url="+encodeURIComponent(u); }
-  ];
+  function showProgress(){ if (progressEl) progressEl.style.display="block"; }
+  function hideProgress(){ if (progressEl) progressEl.style.display="none"; }
+
+  showProgress();
+  setStatus(isSurprise ? "Finding something to surprise you…" : "Searching for \""+query+"\"…");
+
+  // TheMealDB and TheCocktailDB both support CORS — try direct first (fastest).
+  // Fall back to proxies only if direct fetch fails.
   async function tryFetch(url){
-    for (var i=0;i<proxies.length;i++){
+    try{
+      var r = await fetch(url);
+      if (r.ok){ var d = await r.json(); return d; }
+    }catch(e){}
+    for (var i=0; i<2; i++){
+      var proxy = i===0
+        ? "https://corsproxy.io/?url="+encodeURIComponent(url)
+        : "https://api.allorigins.win/raw?url="+encodeURIComponent(url);
       try{
-        var r = await fetch(proxies[i](url));
-        if (r.ok){ var t = await r.text(); if (t&&t.length>50) return JSON.parse(t); }
+        var r = await fetch(proxy);
+        if (r.ok){ var t = await r.text(); if (t&&t.length>10) return JSON.parse(t); }
       }catch(e){}
     }
-    // Try direct (works if APIs have CORS headers)
-    try{ var r=await fetch(url); if(r.ok) return await r.json(); }catch(e){}
     throw new Error("Network error");
   }
   try{
@@ -1920,24 +1970,91 @@ async function findRecipeFromWeb(query, isSurprise){
         ? "https://www.thecocktaildb.com/api/json/v1/1/random.php"
         : "https://www.thecocktaildb.com/api/json/v1/1/search.php?s="+encodeURIComponent(query);
       var data = await tryFetch(url);
-      if (!data.drinks||!data.drinks.length){ setStatus("No cocktail found — try different keywords."); return; }
+      if (!data.drinks||!data.drinks.length){ hideProgress(); setStatus("No cocktail found — try different keywords."); return; }
       draft = parseCocktailDBRecipe(data.drinks[0]);
     } else {
       var url = isSurprise||!query.trim()
         ? "https://www.themealdb.com/api/json/v1/1/random.php"
         : "https://www.themealdb.com/api/json/v1/1/search.php?s="+encodeURIComponent(query);
       var data = await tryFetch(url);
-      if (!data.meals||!data.meals.length){ setStatus("No recipe found — try different keywords."); return; }
+      if (!data.meals||!data.meals.length){ hideProgress(); setStatus("No recipe found — try different keywords."); return; }
       draft = parseMealDBRecipe(data.meals[0]);
     }
+    hideProgress();
     state.importDraft = draft;
     state.formState = {mode:"add", recipeId:null, ingRows:draft.ingredients.length||4};
     state.findRecipeMode = false;
     render();
   }catch(e){
+    hideProgress();
     setStatus("Couldn't connect right now — check your connection and try again.");
     console.error("Find recipe error:", e);
   }
+}
+
+/* ---- Pantry ---- */
+function baseIngName(n){
+  return (n||'').toLowerCase()
+    .replace(/,.*$/,'')
+    .replace(/\b(fresh|dried|ground|minced|diced|chopped|sliced|peeled|crushed|grated|shredded|cooked|raw|boneless|skinless|large|medium|small)\b/gi,'')
+    .replace(/\s+/g,' ').trim();
+}
+function isInPantry(ingName){
+  var b = baseIngName(ingName);
+  if (!b) return false;
+  return state.pantry.some(function(p){
+    var pb = baseIngName(p.name);
+    return b===pb || b.indexOf(pb)>-1 || pb.indexOf(b)>-1;
+  });
+}
+function addToPantry(name, category){
+  if (!name||isInPantry(name)) return;
+  state.pantry.push({id:"p"+Date.now(), name:name.trim(), category:category||"Other"});
+  savePrivateState();
+  render();
+}
+function removeFromPantryByName(name){
+  var b = baseIngName(name);
+  state.pantry = state.pantry.filter(function(p){ return baseIngName(p.name)!==b; });
+  savePrivateState();
+  render();
+}
+function removeFromPantry(id){
+  state.pantry = state.pantry.filter(function(p){ return p.id!==id; });
+  savePrivateState();
+  render();
+}
+function togglePantryItem(name, category){
+  if (isInPantry(name)) removeFromPantryByName(name);
+  else addToPantry(name, category);
+}
+function toggleShowPantry(){ state.showPantry=!state.showPantry; render(); }
+
+/* ---- One-time shopping items ---- */
+function submitOneTimeItem(ev){
+  if (ev && ev.key && ev.key!=="Enter") return;
+  var input = document.getElementById("one-time-input");
+  if (!input||!input.value.trim()) return;
+  state.oneTimeItems.push({id:"ot"+Date.now(), name:input.value.trim(), checked:false});
+  input.value="";
+  savePrivateState();
+  render();
+  // Re-focus the input after render
+  setTimeout(function(){ var el=document.getElementById("one-time-input"); if(el) el.focus(); },0);
+}
+function toggleOneTimeCheck(id){
+  var item=state.oneTimeItems.filter(function(x){return x.id===id;})[0];
+  if (item){ item.checked=!item.checked; savePrivateState(); render(); }
+}
+function removeOneTimeItem(id){
+  state.oneTimeItems=state.oneTimeItems.filter(function(x){return x.id!==id;});
+  savePrivateState();
+  render();
+}
+function clearCheckedOneTimeItems(){
+  state.oneTimeItems=state.oneTimeItems.filter(function(x){return !x.checked;});
+  savePrivateState();
+  render();
 }
 
 function getShareLink(id){
@@ -2766,14 +2883,15 @@ function renderFindRecipeModal(){
     '<button class="chip'+(!isFood?" active":"")+'" onclick="setFindRecipeType(\'cocktail\')">🍹 Cocktail</button>'+
     '</div>'+
     '<div class="field"><label>What are you in the mood for?</label>'+
-    '<input type="text" id="find-recipe-input" placeholder="'+(isFood?"e.g. chicken pasta, tacos, soup":"e.g. margarita, old fashioned, tiki")+'" style="margin-bottom:10px;">'+
+    '<input type="text" id="find-recipe-input" placeholder="'+(isFood?"e.g. chicken pasta, tacos, soup":"e.g. margarita, old fashioned, tiki")+'" onkeydown="if(event.key===\'Enter\') findRecipeFromWeb(this.value, false)">'+
     '</div>'+
-    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">'+
     '<button class="btn" onclick="findRecipeFromWeb(document.getElementById(\'find-recipe-input\').value, false)">Find Recipe →</button>'+
     '<button class="btn secondary" onclick="findRecipeFromWeb(\'\', true)">🎲 Surprise Me</button>'+
     '</div>'+
-    '<div id="find-recipe-status" style="font-size:13px;color:var(--text-soft);min-height:18px;"></div>'+
-    '<div style="font-size:12px;color:var(--text-muted);margin-top:10px;">Pulls real recipes from TheMealDB and TheCocktailDB. You\'ll get to review and edit before saving.</div>'+
+    '<div class="progress-bar" id="find-recipe-progress" style="display:none;"><div class="progress-bar-fill"></div></div>'+
+    '<div id="find-recipe-status" style="font-size:13px;color:var(--text-soft);min-height:18px;margin-top:4px;"></div>'+
+    '<div style="font-size:12px;color:var(--text-muted);margin-top:12px;">Pulls real recipes from TheMealDB and TheCocktailDB. You\'ll get to review and edit before saving.</div>'+
     '</div></div></div></div>';
 }
 
@@ -3010,9 +3128,13 @@ function renderShoppingTab(){
   var map = buildShoppingMap();
   var keys = Object.keys(map);
   var hasStaples = state.staples.length>0;
-  if (!keys.length && !hasStaples){
-    return '<div class="empty"><span class="big">Your list is empty</span>Add some meals to "This Week", or add a few items in the Staples tab, and they\'ll land here organized by aisle.</div>';
+  var hasOneTime = state.oneTimeItems.length>0;
+  var hasRecipes = keys.length>0;
+
+  if (!hasRecipes && !hasStaples && !hasOneTime){
+    return '<div class="empty"><span class="big">Your list is empty</span>Add meals to "This Week," add a staple, or add a one-off item below.</div>';
   }
+
   var byCat = {};
   keys.forEach(function(k){
     var item = map[k];
@@ -3020,10 +3142,37 @@ function renderShoppingTab(){
     byCat[item.category].push({key:k, item:item});
   });
 
-  var totalItems = keys.length + state.staples.length;
-  var html = '<div class="receipt"><div class="receipt-head"><h2>Grocery List</h2>'+
-    '<p>'+state.week.length+' recipe'+(state.week.length===1?"":"s")+' &middot; '+totalItems+' items</p></div>';
+  var totalItems = keys.length + state.staples.length + state.oneTimeItems.filter(function(x){return !x.checked;}).length;
+  var pantryCount = state.pantry.length;
 
+  var html = '<div class="receipt">';
+
+  // Header
+  html += '<div class="receipt-head"><h2>Grocery List</h2>'+
+    '<p>'+state.week.length+' recipe'+(state.week.length===1?"":"s")+' &middot; '+totalItems+' to buy'+
+    (pantryCount>0 ? ' &middot; <button onclick="toggleShowPantry()" style="background:none;border:none;color:var(--sage);font-size:12px;font-weight:700;cursor:pointer;padding:0;">🏠 '+pantryCount+' in pantry</button>' : '')+
+    '</p></div>';
+
+  // Quick-add one-time items
+  html += '<div class="quick-add-row">'+
+    '<input type="text" id="one-time-input" placeholder="Add item to today\'s list…" onkeydown="submitOneTimeItem(event)">'+
+    '<button class="btn" onclick="submitOneTimeItem(null)" style="padding:9px 12px;font-size:13px;">Add</button>'+
+    '</div>';
+
+  // One-time items
+  if (hasOneTime){
+    html += '<div class="cat-block"><div class="cat-title">Added for today</div>';
+    state.oneTimeItems.forEach(function(item){
+      html += '<div class="one-time-item'+(item.checked?" checked":"")+'">'+
+        '<input type="checkbox" '+(item.checked?"checked":"")+' onchange="toggleOneTimeCheck(\''+item.id+'\')" style="width:20px;height:20px;accent-color:var(--amber);flex-shrink:0;">'+
+        '<span style="flex:1;">'+escapeHtml(item.name)+'</span>'+
+        '<button class="remove-btn" onclick="removeOneTimeItem(\''+item.id+'\')" title="Remove">✕</button>'+
+        '</div>';
+    });
+    html += '</div>';
+  }
+
+  // Staples
   if (hasStaples){
     html += '<div class="cat-block"><div class="cat-title">Weekly Staples</div>';
     state.staples.forEach(function(s){
@@ -3031,30 +3180,66 @@ function renderShoppingTab(){
       var checked = !!state.checks[key];
       html += '<label class="shop-item'+(checked?" checked":"")+'">'+
         '<input type="checkbox" '+(checked?"checked":"")+' onchange="toggleCheck(\''+key+'\')">'+
-        '<span class="shop-amt">'+escapeHtml(s.note||"")+'</span><span>'+escapeHtml(s.name||"(unnamed item)")+'</span></label>';
+        '<span class="shop-amt">'+escapeHtml(s.note||"")+'</span>'+
+        '<span style="flex:1;">'+escapeHtml(s.name||"(unnamed item)")+'</span>'+
+        '</label>';
     });
     html += '</div>';
   }
 
+  // Recipe ingredients — with pantry indicator
   CATEGORY_ORDER.forEach(function(cat){
     if (!byCat[cat]) return;
     var items = byCat[cat].sort(function(a,b){ return a.item.name.localeCompare(b.item.name); });
+    var needItems = items.filter(function(e){ return !isInPantry(e.item.name); });
+    var pantryItems = items.filter(function(e){ return isInPantry(e.item.name); });
+    if (!needItems.length && !pantryItems.length) return;
     html += '<div class="cat-block"><div class="cat-title">'+escapeHtml(cat)+'</div>';
-    items.forEach(function(entry){
+    needItems.forEach(function(entry){
       var item = entry.item;
       var checked = !!state.checks[entry.key];
       var amtStr = item.toTaste && item.amount===0 ? (item.unit||"to taste") : formatAmount(item.amount)+" "+(item.unit||"");
       if (item.toTaste && item.amount>0) amtStr += " +";
       html += '<label class="shop-item'+(checked?" checked":"")+'">'+
         '<input type="checkbox" '+(checked?"checked":"")+' onchange="toggleCheck(\''+entry.key.replace(/'/g,"\\'")+'\')">'+
-        '<span class="shop-amt">'+escapeHtml(amtStr)+'</span><span>'+escapeHtml(item.name)+'</span></label>';
+        '<span class="shop-amt">'+escapeHtml(amtStr)+'</span>'+
+        '<span style="flex:1;">'+escapeHtml(item.name)+'</span>'+
+        '<button class="pantry-btn" onclick="event.preventDefault();togglePantryItem(\''+item.name.replace(/'/g,"\\'")+'\')" title="Mark as in pantry">🏠</button>'+
+        '</label>';
     });
+    if (pantryItems.length){
+      pantryItems.forEach(function(entry){
+        var item = entry.item;
+        var amtStr = item.toTaste && item.amount===0 ? (item.unit||"to taste") : formatAmount(item.amount)+" "+(item.unit||"");
+        html += '<label class="shop-item in-pantry">'+
+          '<input type="checkbox" checked disabled style="opacity:.3;">'+
+          '<span class="shop-amt" style="opacity:.5;">'+escapeHtml(amtStr)+'</span>'+
+          '<span style="flex:1;opacity:.5;">'+escapeHtml(item.name)+'</span>'+
+          '<button class="pantry-btn following" onclick="event.preventDefault();togglePantryItem(\''+item.name.replace(/'/g,"\\'")+'\')" title="Remove from pantry">✓ Have it</button>'+
+          '</label>';
+      });
+    }
     html += '</div>';
   });
 
+  // Pantry contents (collapsible)
+  if (pantryCount>0 && state.showPantry){
+    html += '<div class="pantry-section"><div class="pantry-title">🏠 Your Pantry ('+pantryCount+' items stocked)</div>';
+    state.pantry.forEach(function(p){
+      html += '<div class="pantry-item">'+
+        '<span style="flex:1;">'+escapeHtml(p.name)+'</span>'+
+        '<span style="font-size:11px;color:var(--text-muted);">'+escapeHtml(p.category)+'</span>'+
+        '<button onclick="removeFromPantry(\''+p.id+'\')" style="background:none;border:none;color:var(--red);cursor:pointer;padding:4px 6px;font-size:14px;opacity:.6;" title="Remove from pantry">✕</button>'+
+        '</div>';
+    });
+    html += '<button class="btn secondary" onclick="state.pantry=[];savePrivateState();render();" style="margin-top:10px;font-size:12px;padding:6px 12px;">Clear pantry</button>';
+    html += '</div>';
+  }
+
   html += '<div class="receipt-actions">'+
     '<button class="btn secondary" onclick="window.print()">Print list</button>'+
-    '<button class="btn danger" onclick="clearChecks()">Reset checkmarks</button>'+
+    '<button class="btn secondary" onclick="clearCheckedOneTimeItems()" style="font-size:12px;">Clear checked</button>'+
+    '<button class="btn danger" onclick="clearChecks()">Reset all</button>'+
     '</div></div>';
   return html;
 }
