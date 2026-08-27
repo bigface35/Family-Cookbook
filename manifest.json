@@ -22,6 +22,15 @@
       "purpose": "any maskable"
     }
   ],
+  "share_target": {
+    "action": "/Family-Cookbook/",
+    "method": "GET",
+    "params": {
+      "title": "shared_title",
+      "text": "shared_text",
+      "url": "shared_url"
+    }
+  },
   "categories": ["food", "lifestyle"],
   "shortcuts": [
     {

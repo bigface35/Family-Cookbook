@@ -1490,6 +1490,7 @@ var state = {
   migrationStatus:"",
   sharedRecipeView:null,
   pendingSharedRecipeId:null,
+  pendingSharedImportUrl:null,  // URL received via Web Share Target
   starterShares:{},
 
   // Social
@@ -1501,9 +1502,17 @@ var state = {
   findRecipeType:"food",  // "food" | "cocktail"
 
   // Shopping extras
-  oneTimeItems:[],   // [{id,name,checked}] — ad-hoc items for this week's list only
-  pantry:[],         // [{id,name,category}] — items stocked at home
-  showPantry:false   // expand/collapse pantry section in shopping
+  oneTimeItems:[],
+  pantry:[],
+  showPantry:false,
+
+  // AI features (need API key)
+  anthropicApiKey:"",     // stored in Firestore private state — never in source code
+  showSettings:false,
+  mealPlanMode:false,
+  mealPlanDraft:null,     // [{day,name,time,isNew,reason}]
+  mealPlanPrefs:{diet:"", maxTime:45, people:4, notes:""},
+  nutritionCache:{}       // recipeId -> {calories,protein,carbs,fat}
 };
 
 function mergedStarter(base){
@@ -1556,6 +1565,7 @@ function loadState(){
     attachUserListeners(user.uid);
     checkMigrationBanner(user.uid);
     checkSharedRecipeLink();
+    handlePendingSharedImport(); // process any URL that arrived via the share sheet
   }, function(err){
     console.error("Auth error:", err);
     state.authError = err.message;
@@ -1577,6 +1587,8 @@ function attachUserListeners(uid){
       state.following = d.following || [];
       state.oneTimeItems = d.oneTimeItems || [];
       state.pantry = d.pantry || [];
+      state.anthropicApiKey = d.anthropicApiKey || "";
+      state.nutritionCache = d.nutritionCache || {};
       state.staples = (d.staples && d.staples.length) ? d.staples : DEFAULT_STAPLES.slice();
       stapleLoaded = true;
     } else if (!stapleLoaded){
@@ -1621,7 +1633,9 @@ async function savePrivateState(){
       starterShares: state.starterShares,
       following: state.following,
       oneTimeItems: state.oneTimeItems,
-      pantry: state.pantry
+      pantry: state.pantry,
+      anthropicApiKey: state.anthropicApiKey,
+      nutritionCache: state.nutritionCache
     }, {merge:true});
   }catch(e){ console.error("Save failed:", e); }
 }
@@ -2057,6 +2071,212 @@ function clearCheckedOneTimeItems(){
   render();
 }
 
+/* ---- Settings ---- */
+function openSettings(){
+  state.showSettings=true; state.modalRecipe=null; state.formState=null;
+  state.importMode=false; state.findRecipeMode=false; state.mealPlanMode=false;
+  render();
+}
+function closeSettings(){ state.showSettings=false; render(); }
+async function saveApiKey(){
+  var input=document.getElementById("api-key-input");
+  if (!input) return;
+  state.anthropicApiKey = input.value.trim();
+  await savePrivateState();
+  var s=document.getElementById("api-key-status");
+  if (s){ s.textContent="✓ Saved"; s.style.color="var(--green)"; setTimeout(function(){if(s)s.textContent="";},2500); }
+}
+async function testApiKey(){
+  var s=document.getElementById("api-key-status");
+  if (!state.anthropicApiKey){ if(s){s.textContent="Enter a key first";s.style.color="var(--red)";} return; }
+  if (s){ s.textContent="Testing…"; s.style.color="var(--text-soft)"; }
+  try{
+    await callClaude("Say only: ok","ping");
+    if (s){ s.textContent="✓ Key works!"; s.style.color="var(--green)"; }
+    setTimeout(function(){if(s)s.textContent="";},3000);
+  }catch(e){
+    if (s){ s.textContent="✗ "+(e.message||"Invalid key"); s.style.color="var(--red)"; }
+  }
+}
+
+/* ---- Claude API helper (browser-side, user's own key) ---- */
+async function callClaude(system, user, maxTokens){
+  if (!state.anthropicApiKey) throw new Error("No Anthropic API key — add one in Settings.");
+  var resp = await fetch("https://api.anthropic.com/v1/messages",{
+    method:"POST",
+    headers:{
+      "Content-Type":"application/json",
+      "x-api-key": state.anthropicApiKey,
+      "anthropic-version":"2023-06-01",
+      "anthropic-dangerous-allow-browser":"true"
+    },
+    body: JSON.stringify({
+      model:"claude-sonnet-4-6",
+      max_tokens: maxTokens||1000,
+      system: system,
+      messages:[{role:"user",content:user}]
+    })
+  });
+  if (!resp.ok){
+    var e=await resp.json().catch(function(){return{};});
+    throw new Error((e.error&&e.error.message)||("API error "+resp.status));
+  }
+  var data=await resp.json();
+  return data.content.map(function(b){return b.type==="text"?b.text:"";}).join("");
+}
+
+/* ---- AI Meal Plan ---- */
+function openMealPlanModal(){
+  state.mealPlanMode=true; state.mealPlanDraft=null;
+  state.modalRecipe=null; state.formState=null; render();
+}
+function closeMealPlanModal(){ state.mealPlanMode=false; state.mealPlanDraft=null; render(); }
+function updateMealPlanPref(key,val){ state.mealPlanPrefs[key]=val; }
+
+async function generateMealPlan(){
+  var prefs = state.mealPlanPrefs;
+  var myRecipes = allRecipes().map(function(r){return r.name;});
+  var statusEl=document.getElementById("mealplan-status");
+  var progEl=document.getElementById("mealplan-progress");
+  function setStatus(msg){if(statusEl)statusEl.textContent=msg;}
+  function showProg(){if(progEl)progEl.style.display="block";}
+  function hideProg(){if(progEl)progEl.style.display="none";}
+  showProg(); setStatus("Thinking through your week…");
+  try{
+    var raw = await callClaude(
+      "You are a meal planner. Respond ONLY with a valid JSON array, no markdown, no explanation.",
+      "Plan 7 dinners for a family of "+(prefs.people||4)+
+      (prefs.diet?", diet/preferences: "+prefs.diet:"")+
+      ", max "+(prefs.maxTime||45)+" min per meal"+
+      (prefs.notes?", notes: "+prefs.notes:"")+
+      ".\n\nTheir saved recipes: "+myRecipes.join(", ")+
+      ".\n\nReturn exactly 7 items in this JSON shape:\n"+
+      '[{"day":"Monday","name":"Recipe Name","time":"30 min","isNew":false,"reason":"why it fits"}]\n'+
+      "Set isNew:false ONLY when name exactly matches their saved list. isNew:true for new ideas."
+    );
+    var match=raw.match(/\[[\s\S]*\]/);
+    if (!match) throw new Error("Unexpected response — try again");
+    state.mealPlanDraft=JSON.parse(match[0]);
+    hideProg(); setStatus(""); render();
+  }catch(e){
+    hideProg(); setStatus("Error: "+(e.message||"Try again"));
+    console.error(e);
+  }
+}
+
+function applyMealPlan(){
+  if (!state.mealPlanDraft) return;
+  state.mealPlanDraft.forEach(function(item){
+    if (!item.isNew){
+      var recipe=allRecipes().filter(function(r){return r.name===item.name;})[0];
+      if (recipe && !inWeek(recipe.id)) state.week.push({id:recipe.id,batches:1});
+    }
+  });
+  saveWeek();
+  state.mealPlanMode=false; state.mealPlanDraft=null; state.tab="week"; render();
+}
+
+/* ---- Nutrition estimation (via Claude) ---- */
+async function estimateNutrition(recipeId){
+  var recipe=findRecipe(recipeId);
+  if (!recipe) return;
+  var statusEl=document.getElementById("nutrition-status");
+  var progEl=document.getElementById("nutrition-progress");
+  function setStatus(msg,col){if(statusEl){statusEl.textContent=msg;if(col)statusEl.style.color=col;}}
+  function showProg(){if(progEl)progEl.style.display="block";}
+  function hideProg(){if(progEl)progEl.style.display="none";}
+  showProg(); setStatus("Estimating nutrition…","var(--text-soft)");
+  try{
+    var ingList=recipe.ingredients.map(function(i){
+      return (i.amount?formatAmount(i.amount)+" "+(i.unit||"")+" ":"")+i.name;
+    }).join("\n");
+    var raw=await callClaude(
+      "You are a nutrition expert. Respond ONLY with a JSON object, no markdown.",
+      "Estimate nutrition per serving for this recipe (serves "+(recipe.servings||4)+"):\n\n"+
+      recipe.name+"\n\nIngredients:\n"+ingList+"\n\n"+
+      'Return ONLY: {"calories":320,"protein":28,"carbs":35,"fat":12}\n'+
+      "All values as integers per single serving. Be realistic for home cooking."
+    );
+    var match=raw.match(/\{[\s\S]*?\}/);
+    if (!match) throw new Error("No data returned");
+    var nutrition=JSON.parse(match[0]);
+    state.nutritionCache[recipeId]=nutrition;
+    // Persist to Firestore if it's an owned recipe
+    if (isOwnedRecipe(recipeId)){
+      try{ await db.collection("recipes").doc(recipeId).update({nutrition:nutrition}); }catch(e){}
+    } else {
+      await savePrivateState(); // cache saved in private state for starter recipes
+    }
+    hideProg(); setStatus("",""); render();
+  }catch(e){
+    hideProg(); setStatus("Error: "+(e.message||"Try again"),"var(--red)");
+    console.error(e);
+  }
+}
+
+/* ---- Social video / post import ---- */
+async function importFromSocial(){
+  var urlInput=document.getElementById("social-url-input");
+  var statusEl=document.getElementById("social-import-status");
+  var progEl=document.getElementById("social-import-progress");
+  var url=urlInput?urlInput.value.trim():"";
+  if (!url){if(statusEl)statusEl.textContent="Paste a URL first";return;}
+  function setStatus(msg){if(statusEl)statusEl.textContent=msg;}
+  function showProg(){if(progEl)progEl.style.display="block";}
+  function hideProg(){if(progEl)progEl.style.display="none";}
+  showProg(); setStatus("Fetching post…");
+  var pageText="";
+  // TikTok oEmbed (no CORS issues)
+  if (url.includes("tiktok.com")){
+    try{
+      var oe=await fetch("https://www.tiktok.com/oembed?url="+encodeURIComponent(url));
+      if (oe.ok){ var d=await oe.json(); pageText=(d.title||"")+" "+(d.author_name||""); }
+    }catch(e){}
+  }
+  // CORS proxy fallback for page content
+  if (!pageText){
+    var proxies=["https://corsproxy.io/?url=","https://api.allorigins.win/raw?url="];
+    for (var i=0;i<proxies.length&&!pageText;i++){
+      try{
+        var r=await fetch(proxies[i]+encodeURIComponent(url));
+        if (r.ok){
+          var t=await r.text();
+          var desc=(t.match(/<meta[^>]+(?:og:description|description)[^>]+content="([^"]{10,})"/i)||[])[1]||"";
+          var title=(t.match(/<title[^>]*>([^<]+)<\/title>/i)||[])[1]||"";
+          pageText=(title+" "+desc).trim();
+        }
+      }catch(e){}
+    }
+  }
+  if (!pageText){
+    hideProg();
+    setStatus("Couldn't fetch that page — try pasting the caption in the text box below instead.");
+    return;
+  }
+  setStatus("Extracting recipe with AI…");
+  try{
+    var raw=await callClaude(
+      "You are a recipe extractor. Extract a recipe from social media text. Respond ONLY with valid JSON.",
+      "Extract a recipe from this social media post:\n\n"+pageText+"\n\n"+
+      'Return ONLY this JSON (or null if no recipe found):\n'+
+      '{"name":"Recipe Name","time":"30 min","servings":4,"tags":["Quick"],"kidFriendly":false,"kidNote":"",'+
+      '"ingredients":[{"amount":2,"unit":"cups","name":"flour","category":"Pantry & Dry Goods"}],'+
+      '"steps":["Step 1.","Step 2."]}\n'+
+      "Valid categories: Produce, Meat & Seafood, Dairy & Eggs, Bakery & Grains, Pantry & Dry Goods, Condiments & Sauces, Spices & Seasonings, Spirits & Mixers, Frozen, Other."
+    );
+    if (raw.trim()==="null"||raw.includes('"null"')) throw new Error("No recipe found in that post");
+    var match=raw.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error("No recipe found in that post");
+    var draft=JSON.parse(match[0]);
+    hideProg(); setStatus("");
+    state.importDraft=draft;
+    state.formState={mode:"add",recipeId:null,ingRows:draft.ingredients.length||4};
+    state.importMode=false; render();
+  }catch(e){
+    hideProg(); setStatus("Error: "+(e.message||"Try again"));
+  }
+}
+
 function getShareLink(id){
   var url = new URL(window.location.href);
   url.search = ""; url.hash = "";
@@ -2135,6 +2355,48 @@ async function migrateOldCookbook(){
   }
 }
 function dismissMigrationBanner(){ state.showMigrationBanner = false; render(); }
+
+// Detect URLs sent to Mise via the OS share sheet (Web Share Target API).
+// Runs immediately on load, before auth — stores URL for processing after sign-in.
+function checkShareTarget(){
+  var params = new URLSearchParams(window.location.search);
+  var sharedUrl  = params.get("shared_url")  || "";
+  var sharedText = params.get("shared_text") || "";
+
+  var url = (sharedUrl.startsWith("http") ? sharedUrl : null) ||
+            (sharedText.startsWith("http") ? sharedText : null);
+
+  if (url){
+    state.pendingSharedImportUrl = url;
+    // Remove share params from the URL bar so refreshing doesn't re-trigger
+    try{
+      var clean = new URL(window.location.href);
+      ["shared_url","shared_text","shared_title"].forEach(function(k){ clean.searchParams.delete(k); });
+      window.history.replaceState({}, "", clean.toString());
+    }catch(e){}
+  }
+}
+
+// Called after the user is confirmed signed in.
+// Routes the pending shared URL to the right importer automatically.
+function handlePendingSharedImport(){
+  var url = state.pendingSharedImportUrl;
+  if (!url) return;
+  state.pendingSharedImportUrl = null;
+
+  var isSocial = /tiktok\.com|instagram\.com\/(reel|p)\/|youtube\.com\/shorts|youtu\.be/.test(url);
+  state.importMode = true;
+  render();
+  setTimeout(function(){
+    if (isSocial){
+      var inp = document.getElementById("social-url-input");
+      if (inp){ inp.value = url; importFromSocial(); }
+    } else {
+      var inp = document.getElementById("import-url-input");
+      if (inp){ inp.value = url; handleUrlImport(); }
+    }
+  }, 80);
+}
 
 function checkSharedRecipeLink(){
   var params = new URLSearchParams(window.location.search);
@@ -2779,6 +3041,10 @@ function render(){
   html += '</div>';
   if (state.formState){
     html += renderRecipeFormModal();
+  } else if (state.showSettings){
+    html += renderSettingsModal();
+  } else if (state.mealPlanMode){
+    html += renderMealPlanModal();
   } else if (state.findRecipeMode){
     html += renderFindRecipeModal();
   } else if (state.importMode){
@@ -2870,6 +3136,107 @@ function renderCommunityTab(){
   return html;
 }
 
+function renderSettingsModal(){
+  var hasKey = !!state.anthropicApiKey;
+  var maskedKey = hasKey ? "sk-ant-…"+state.anthropicApiKey.slice(-6) : "";
+  return '<div class="overlay" onclick="if(event.target===this) closeSettings()"><div class="modal">'+
+    '<button class="modal-close" onclick="closeSettings()">×</button>'+
+    '<div class="modal-scroll">'+
+    '<div class="modal-head"><h2>Settings</h2></div>'+
+    '<div class="modal-body">'+
+
+    '<div class="field">'+
+    '<label>Anthropic API Key <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;opacity:.7;">— enables AI meal plans, nutrition estimates, and social import</span></label>'+
+    '<input type="password" id="api-key-input" placeholder="sk-ant-api03-…" value="'+escapeHtml(state.anthropicApiKey)+'" autocomplete="off" style="font-family:var(--font-mono,monospace);font-size:13px;">'+
+    (hasKey?'<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Currently saved: '+escapeHtml(maskedKey)+'</div>':'')+
+    '<div style="display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap;">'+
+    '<button class="btn" onclick="saveApiKey()">Save key</button>'+
+    '<button class="btn secondary" onclick="testApiKey()">Test connection</button>'+
+    '<span id="api-key-status" style="font-size:13px;"></span>'+
+    '</div>'+
+    '<div style="font-size:12px;color:var(--text-muted);margin-top:10px;line-height:1.6;">'+
+    'Get a free key at <a href="https://console.anthropic.com/" target="_blank" style="color:var(--amber);">console.anthropic.com</a>. '+
+    'Your key is stored in your private Firestore account and never shared. '+
+    'New accounts include $5 of free credit (~1,600 meal plans).'+
+    '</div>'+
+    '</div>'+
+
+    '<div class="modal-actions">'+
+    '<button class="btn secondary" onclick="closeSettings()">Done</button>'+
+    '</div>'+
+    '</div></div></div></div>';
+}
+
+function renderMealPlanModal(){
+  var p = state.mealPlanPrefs;
+  var hasKey = !!state.anthropicApiKey;
+
+  if (!hasKey){
+    return '<div class="overlay" onclick="if(event.target===this) closeMealPlanModal()"><div class="modal">'+
+      '<button class="modal-close" onclick="closeMealPlanModal()">×</button>'+
+      '<div class="modal-scroll"><div class="modal-head"><h2>Generate Meal Plan</h2></div>'+
+      '<div class="modal-body" style="text-align:center;padding:30px 20px;">'+
+      '<div style="font-size:32px;margin-bottom:12px;">✨</div>'+
+      '<p style="margin-bottom:16px;color:var(--text-soft);">AI meal planning needs an Anthropic API key. It\'s free to set up and takes about 2 minutes.</p>'+
+      '<button class="btn" onclick="closeMealPlanModal();openSettings();">Add API Key in Settings →</button>'+
+      '</div></div></div></div>';
+  }
+
+  if (!state.mealPlanDraft){
+    // Preferences form
+    return '<div class="overlay" onclick="if(event.target===this) closeMealPlanModal()"><div class="modal">'+
+      '<button class="modal-close" onclick="closeMealPlanModal()">×</button>'+
+      '<div class="modal-scroll">'+
+      '<div class="modal-head"><h2>Generate Meal Plan</h2>'+
+      '<div class="rcard-meta">AI will suggest 7 dinners using your saved recipes + new ideas</div></div>'+
+      '<div class="modal-body">'+
+      '<div class="field"><label>Dietary preferences / restrictions</label>'+
+      '<input type="text" placeholder="e.g. no shellfish, vegetarian Tuesdays, low-carb" value="'+escapeHtml(p.diet)+'" oninput="updateMealPlanPref(\'diet\',this.value)"></div>'+
+      '<div class="field" style="display:flex;gap:12px;">'+
+      '<div style="flex:1;"><label>Max time per meal</label>'+
+      '<select onchange="updateMealPlanPref(\'maxTime\',this.value)">'+
+      ['20','30','45','60','90'].map(function(t){return '<option value="'+t+'"'+(String(p.maxTime)===t?" selected":"")+'>'+t+' min</option>';}).join("")+
+      '</select></div>'+
+      '<div style="flex:1;"><label>Number of people</label>'+
+      '<input type="number" min="1" max="12" value="'+escapeHtml(String(p.people))+'" oninput="updateMealPlanPref(\'people\',parseInt(this.value)||4)"></div>'+
+      '</div>'+
+      '<div class="field"><label>Anything else for Claude to consider?</label>'+
+      '<input type="text" placeholder="e.g. try new cuisines, avoid repeating last week\'s pasta" value="'+escapeHtml(p.notes||"")+'" oninput="updateMealPlanPref(\'notes\',this.value)"></div>'+
+      '<div class="progress-bar" id="mealplan-progress" style="display:none;"><div class="progress-bar-fill"></div></div>'+
+      '<div id="mealplan-status" style="font-size:13px;color:var(--text-soft);min-height:18px;margin-top:4px;"></div>'+
+      '<div class="modal-actions">'+
+      '<button class="btn" onclick="generateMealPlan()">✨ Generate plan</button>'+
+      '<button class="btn secondary" onclick="closeMealPlanModal()">Cancel</button>'+
+      '</div></div></div></div></div>';
+  }
+
+  // Preview draft
+  var html = '<div class="overlay" onclick="if(event.target===this) closeMealPlanModal()"><div class="modal">'+
+    '<button class="modal-close" onclick="closeMealPlanModal()">×</button>'+
+    '<div class="modal-scroll">'+
+    '<div class="modal-head"><h2>Your Week</h2>'+
+    '<div class="rcard-meta">Review and apply — existing recipes get added to This Week, new ideas are shown for reference</div></div>'+
+    '<div class="modal-body">';
+  state.mealPlanDraft.forEach(function(item){
+    var badge = item.isNew
+      ? '<span style="font-size:11px;background:rgba(212,168,83,.15);color:var(--amber-lo);border-radius:var(--radius);padding:2px 7px;font-weight:700;">New idea</span>'
+      : '<span style="font-size:11px;background:rgba(74,133,96,.15);color:var(--green);border-radius:var(--radius);padding:2px 7px;font-weight:700;">In your cookbook</span>';
+    html += '<div style="padding:10px 0;border-bottom:1px solid var(--border);">'+
+      '<div style="display:flex;align-items:baseline;gap:8px;margin-bottom:3px;">'+
+      '<span style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--amber-lo);min-width:72px;">'+escapeHtml(item.day)+'</span>'+
+      badge+'</div>'+
+      '<div style="font-size:16px;font-weight:500;color:var(--text);margin:4px 0 2px;">'+escapeHtml(item.name)+'</div>'+
+      '<div style="font-size:12px;color:var(--text-muted);">'+escapeHtml(item.time||"")+(item.reason?" · "+escapeHtml(item.reason):"")+'</div>'+
+      '</div>';
+  });
+  html += '<div class="modal-actions" style="margin-top:16px;">'+
+    '<button class="btn" onclick="applyMealPlan()">Apply to This Week</button>'+
+    '<button class="btn secondary" onclick="state.mealPlanDraft=null;render()">Re-generate</button>'+
+    '<button class="btn secondary" onclick="closeMealPlanModal()">Cancel</button>'+
+    '</div></div></div></div></div>';
+  return html;
+}
+
 function renderFindRecipeModal(){
   var isFood = state.findRecipeType==="food";
   return '<div class="overlay" onclick="if(event.target===this) closeFindRecipe()"><div class="modal">'+
@@ -2922,6 +3289,7 @@ function renderTabs(){
   // Account line (desktop)
   html += '<div class="account-line">'+
     'Signed in as '+escapeHtml(state.currentUser.displayName||state.currentUser.email)+
+    ' &middot; <a href="#" onclick="openSettings();return false;">Settings</a>'+
     ' &middot; <a href="#" onclick="signOutUser();return false;">Sign out</a></div>';
 
   // Mobile bottom tab bar
@@ -3083,6 +3451,33 @@ function renderRecipeModal(r){
       '</div>';
   }
 
+  // Nutrition section
+  var nutrition = state.nutritionCache[r.id] || r.nutrition || null;
+  var hasKey = !!state.anthropicApiKey;
+  html += '<div style="margin-top:18px;border-top:1px solid var(--border-mid);padding-top:14px;">'+
+    '<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--amber-lo);margin-bottom:10px;">Nutrition per serving</div>';
+  if (nutrition){
+    html += '<div style="display:flex;gap:10px;flex-wrap:wrap;">'+
+      [['🔥','Calories',nutrition.calories,'kcal'],['🥩','Protein',nutrition.protein,'g'],['🌾','Carbs',nutrition.carbs,'g'],['🧈','Fat',nutrition.fat,'g']].map(function(n){
+        return '<div style="background:var(--bg-raised);border-radius:var(--radius);padding:8px 12px;text-align:center;flex:1;min-width:64px;">'+
+          '<div style="font-size:18px;line-height:1;">'+n[0]+'</div>'+
+          '<div style="font-size:17px;font-weight:500;color:var(--text);margin-top:2px;">'+n[2]+'<span style="font-size:11px;color:var(--text-muted);">'+n[3]+'</span></div>'+
+          '<div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;">'+n[1]+'</div>'+
+          '</div>';
+      }).join("")+
+      '</div>'+
+      '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;">AI estimate · <button onclick="estimateNutrition(\''+r.id+'\')" style="background:none;border:none;color:var(--amber-lo);cursor:pointer;font-size:11px;padding:0;">Recalculate</button></div>'+
+      '<div class="progress-bar" id="nutrition-progress" style="display:none;margin-top:6px;"><div class="progress-bar-fill"></div></div>'+
+      '<div id="nutrition-status" style="font-size:12px;min-height:14px;"></div>';
+  } else if (hasKey){
+    html += '<button class="btn secondary" onclick="estimateNutrition(\''+r.id+'\')" style="font-size:12px;padding:7px 12px;min-height:36px;">✨ Estimate with AI</button>'+
+      '<div class="progress-bar" id="nutrition-progress" style="display:none;margin-top:8px;"><div class="progress-bar-fill"></div></div>'+
+      '<div id="nutrition-status" style="font-size:12px;margin-top:6px;min-height:14px;"></div>';
+  } else {
+    html += '<div style="font-size:12px;color:var(--text-muted);">Add an <a href="#" onclick="closeModal();openSettings();return false;" style="color:var(--amber);">Anthropic API key in Settings</a> to estimate calories and macros.</div>';
+  }
+  html += '</div>';
+
   html += '<div class="modal-actions">';
   if (owned){
     html += '<button class="btn" onclick="toggleWeek(\''+r.id+'\')">'+(added?"✓ On this week's list":"+ Add to this week")+'</button>'+
@@ -3097,7 +3492,7 @@ function renderRecipeModal(r){
   }
   html += '<button class="btn secondary" onclick="closeModal()">Close</button>';
   html += '</div>';
-  html += '</div></div></div></div>'; // modal-actions, modal-body, modal-scroll, modal, overlay
+  html += '</div></div></div></div>';
   return html;
 }
 
@@ -3105,7 +3500,10 @@ function renderWeekTab(){
   if (!state.week.length){
     return '<div class="empty"><span class="big">Nothing on the menu yet</span>Head to Recipes and tap "+ This week" on anything you\'re craving.</div>';
   }
-  var html = '<div class="toolbar"><h4 style="margin:0;flex:1;font-family:\'Caveat\',cursive;font-size:26px;">This week\'s menu</h4>'+
+  var html = "";
+  html += '<div class="toolbar">'+
+    '<h4 style="margin:0;flex:1;font-family:\'Caveat\',cursive;font-size:26px;">This week\'s menu</h4>'+
+    '<button class="btn secondary" onclick="openMealPlanModal()" style="font-size:12px;padding:8px 12px;">✨ Generate plan</button>'+
     '<button class="btn danger" onclick="clearWeek()">Clear week</button></div>';
   state.week.forEach(function(entry){
     var r = findRecipe(entry.id);
@@ -3328,24 +3726,44 @@ function renderRecipeFormModal(){
 }
 
 function renderImportModal(){
+  var hasKey = !!state.anthropicApiKey;
   var html = '<div class="overlay" onclick="if(event.target===this) closeImportModal()"><div class="modal">'+
     '<button class="modal-close" onclick="closeImportModal()">×</button>'+
     '<div class="modal-scroll">'+
     '<div class="modal-head"><h2>Import a recipe</h2>'+
-    '<div class="rcard-meta">Pull one in from a recipe site, or paste it in by hand</div></div>'+
+    '<div class="rcard-meta">Pull in from a recipe site, social post, or paste it manually</div></div>'+
     '<div class="modal-body">'+
-    '<div class="field"><label>Recipe URL</label>'+
+
+    // --- Recipe URL section ---
+    '<div class="field"><label>Recipe URL <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;opacity:.7;">— any food blog or recipe site</span></label>'+
     '<div style="display:flex;gap:8px;">'+
-    '<input type="text" id="import-url-input" placeholder="https://example.com/some-recipe" style="flex:1;">'+
+    '<input type="text" id="import-url-input" placeholder="https://example.com/some-recipe" style="flex:1;" onkeydown="if(event.key===\'Enter\') handleUrlImport()">'+
     '<button type="button" class="btn" onclick="handleUrlImport()">Fetch</button>'+
     '</div>'+
-    '<div id="import-status" style="font-size:13px;color:var(--ink-soft);margin-top:8px;min-height:16px;"></div>'+
-    '<div style="font-size:12px;color:var(--ink-soft);margin-top:6px;">Works best on sites that publish structured recipe data (most food blogs and recipe sites do). If it can\'t find anything, paste it in below.</div>'+
+    '<div id="import-status" style="font-size:13px;color:var(--text-soft);margin-top:6px;min-height:16px;"></div>'+
     '</div>'+
-    '<div style="text-align:center;margin:20px 0 16px;color:var(--ink-soft);font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;">— or paste it in —</div>'+
+
+    // --- Social / Video section ---
+    '<div class="field" style="border-top:1px solid var(--border-mid);padding-top:16px;margin-top:4px;">'+
+    '<label>Social / Video URL ✨ <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;opacity:.7;">— TikTok, Instagram, YouTube description</span></label>'+
+    (hasKey
+      ? '<div style="display:flex;gap:8px;">'+
+        '<input type="text" id="social-url-input" placeholder="https://www.tiktok.com/@user/video/…" style="flex:1;" onkeydown="if(event.key===\'Enter\') importFromSocial()">'+
+        '<button type="button" class="btn" onclick="importFromSocial()">Extract</button>'+
+        '</div>'+
+        '<div class="progress-bar" id="social-import-progress" style="display:none;margin-top:8px;"><div class="progress-bar-fill"></div></div>'+
+        '<div id="social-import-status" style="font-size:13px;color:var(--text-soft);margin-top:6px;min-height:16px;"></div>'+
+        '<div style="font-size:12px;color:var(--text-muted);margin-top:6px;">Paste a TikTok or Instagram post URL. If it can\'t extract automatically, paste the caption text in the "paste it in" section below.</div>'
+      : '<div style="font-size:13px;color:var(--text-soft);padding:10px;background:var(--bg-raised);border-radius:var(--radius);">'+
+        'Requires an Anthropic API key. <a href="#" onclick="closeImportModal();openSettings();return false;" style="color:var(--amber);">Add one in Settings →</a></div>'
+    )+
+    '</div>'+
+
+    // --- Manual paste section ---
+    '<div style="text-align:center;margin:20px 0 14px;color:var(--text-muted);font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;">— or paste it in manually —</div>'+
     '<div class="field"><label>Recipe name</label><input type="text" id="import-paste-name" placeholder="e.g. Grandma\'s Lasagna"></div>'+
-    '<div class="field"><label>Ingredients (one per line)</label><textarea id="import-paste-ingredients" placeholder="2 cups flour\n1 lb ground beef\n1 onion, diced" style="min-height:90px;"></textarea></div>'+
-    '<div class="field"><label>Steps (one per line)</label><textarea id="import-paste-steps" placeholder="Preheat the oven...\nBrown the beef..." style="min-height:90px;"></textarea></div>'+
+    '<div class="field"><label>Ingredients (one per line)</label><textarea id="import-paste-ingredients" placeholder="2 cups flour\n1 lb ground beef\n1 onion, diced" style="min-height:80px;"></textarea></div>'+
+    '<div class="field"><label>Steps (one per line)</label><textarea id="import-paste-steps" placeholder="Preheat the oven…\nBrown the beef…" style="min-height:80px;"></textarea></div>'+
     '<div class="modal-actions">'+
     '<button type="button" class="btn" onclick="handlePasteImport()">Continue</button>'+
     '<button type="button" class="btn secondary" onclick="closeImportModal()">Cancel</button>'+
@@ -3429,20 +3847,19 @@ function attachFormHandler(){
 /* =========================================================
    INIT
    ========================================================= */
+// Check for shared URLs from the OS share sheet before anything else runs
+checkShareTarget();
 loadState();
 
 // Register service worker — auto-update for all users on every deploy
 if ('serviceWorker' in navigator){
   window.addEventListener('load', function(){
     navigator.serviceWorker.register('sw.js').then(function(reg){
-      // When a new service worker finishes installing, reload immediately.
-      // The SW already calls skipWaiting() so it activates without waiting.
       reg.addEventListener('updatefound', function(){
         var newSW = reg.installing;
         newSW.addEventListener('statechange', function(){
           if (newSW.state === 'installed' && navigator.serviceWorker.controller){
-            // New version ready — reload to serve it
-            window.location.reload();
+            showUpdateToast();
           }
         });
       });
@@ -3450,16 +3867,31 @@ if ('serviceWorker' in navigator){
       console.log('SW registration failed:', e);
     });
 
-    // Fires when a new SW takes over (skipWaiting + clients.claim).
-    // Reload to ensure the page is running the fresh version.
     var refreshing = false;
     navigator.serviceWorker.addEventListener('controllerchange', function(){
-      if (!refreshing){
-        refreshing = true;
-        window.location.reload();
-      }
+      if (!refreshing){ refreshing = true; window.location.reload(); }
     });
   });
+}
+
+function showUpdateToast(){
+  // Brief "Mise updated" banner — then reload so the new version runs.
+  // Much friendlier than a silent page flash.
+  var toast = document.createElement('div');
+  toast.id = 'update-toast';
+  toast.innerHTML = '<span>✨ Mise updated — refreshing…</span>';
+  toast.style.cssText = [
+    'position:fixed','top:16px','left:50%','transform:translateX(-50%)',
+    'background:var(--amber)','color:var(--bg-deep)',
+    'font-family:\'Libre Franklin\',sans-serif','font-size:13px','font-weight:700',
+    'padding:10px 20px','border-radius:999px',
+    'z-index:9999','white-space:nowrap',
+    'box-shadow:0 4px 16px rgba(0,0,0,.4)',
+    'transition:opacity .3s'
+  ].join(';');
+  document.body.appendChild(toast);
+  // Short pause so they can read it, then reload
+  setTimeout(function(){ window.location.reload(); }, 1200);
 }
 </script>
 </body>
