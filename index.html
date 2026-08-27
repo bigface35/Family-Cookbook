@@ -563,18 +563,18 @@ input[type=checkbox]{-webkit-appearance:checkbox;appearance:checkbox;}
     will-change:transform;
   }
   .tab-bar-mobile button{
-    flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
-    background:none;border:none;cursor:pointer;padding:8px 4px;
-    font-family:'Libre Franklin',sans-serif;font-size:9px;font-weight:800;
-    text-transform:uppercase;letter-spacing:.03em;color:var(--text-muted);
-    min-height:56px;position:relative;transition:color .12s;
+    flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
+    background:none;border:none;cursor:pointer;padding:6px 2px;
+    font-family:'Libre Franklin',sans-serif;font-size:7.5px;font-weight:800;
+    text-transform:uppercase;letter-spacing:.02em;color:var(--text-muted);
+    min-height:54px;position:relative;transition:color .12s;
   }
   .tab-bar-mobile button.active{color:var(--amber);}
   .tab-bar-mobile button.active::after{
     content:'';position:absolute;top:0;left:0;right:0;
     height:2px;background:var(--amber);
   }
-  .tab-bar-mobile .tab-icon{font-size:20px;line-height:1;}
+  .tab-bar-mobile .tab-icon{font-size:18px;line-height:1;}
   .tab-bar-mobile .tab-badge{
     position:absolute;top:5px;right:calc(50% - 20px);
     background:var(--amber);color:var(--bg-deep);
@@ -1500,11 +1500,15 @@ var state = {
   // Find New Recipe
   findRecipeMode:false,
   findRecipeType:"food",  // "food" | "cocktail"
+  findRecipeResults:[],   // [{id,name,thumb,type}] — selectable search results
 
   // Shopping extras
   oneTimeItems:[],
   pantry:[],
   showPantry:false,
+
+  // Recently cooked tracking
+  recentlyMade:[],        // [{id,name,date}] — added when a week is cleared
 
   // AI features (need API key)
   anthropicApiKey:"",     // stored in Firestore private state — never in source code
@@ -1520,12 +1524,19 @@ function mergedStarter(base){
   if (state.recipeEdits[base.id]) return state.recipeEdits[base.id];
   return base;
 }
+function isCocktailRecipe(r){
+  return r && (r.tags||[]).indexOf("Cocktail")>-1;
+}
 function allRecipes(){
-  var starters = STARTER_RECIPES.map(mergedStarter).filter(function(r){ return !!r; });
-  // Exclude share docs (copies of built-in recipes created for public sharing).
-  // They have sourceStarterId set and belong in Community, not the owner's recipe list.
-  var ownedRecipes = state.myRecipes.filter(function(r){ return !r.sourceStarterId; });
+  // Food only — cocktails appear in their own tab
+  var starters = STARTER_RECIPES.map(mergedStarter).filter(function(r){ return r && !isCocktailRecipe(r); });
+  var ownedRecipes = state.myRecipes.filter(function(r){ return !r.sourceStarterId && !isCocktailRecipe(r); });
   return starters.concat(ownedRecipes);
+}
+function allCocktails(){
+  var starters = STARTER_RECIPES.map(mergedStarter).filter(function(r){ return r && isCocktailRecipe(r); });
+  var ownedCocktails = state.myRecipes.filter(function(r){ return !r.sourceStarterId && isCocktailRecipe(r); });
+  return starters.concat(ownedCocktails);
 }
 function findRecipe(id){
   var all = allRecipes();
@@ -1587,6 +1598,7 @@ function attachUserListeners(uid){
       state.following = d.following || [];
       state.oneTimeItems = d.oneTimeItems || [];
       state.pantry = d.pantry || [];
+      state.recentlyMade = d.recentlyMade || [];
       state.anthropicApiKey = d.anthropicApiKey || "";
       state.nutritionCache = d.nutritionCache || {};
       state.staples = (d.staples && d.staples.length) ? d.staples : DEFAULT_STAPLES.slice();
@@ -1634,6 +1646,7 @@ async function savePrivateState(){
       following: state.following,
       oneTimeItems: state.oneTimeItems,
       pantry: state.pantry,
+      recentlyMade: state.recentlyMade,
       anthropicApiKey: state.anthropicApiKey,
       nutritionCache: state.nutritionCache
     }, {merge:true});
@@ -1948,6 +1961,16 @@ function parseCocktailDBRecipe(drink){
   return {name:drink.strDrink||"Cocktail", time:"5 min", servings:1, tags:["Cocktail"],
     kidFriendly:false, kidNote:"", ingredients:ingredients, steps:steps};
 }
+// Areas/cuisines TheMealDB recognises for direct filtering
+var MEAL_AREAS = ["american","british","canadian","chinese","croatian","dutch","egyptian",
+  "french","greek","indian","irish","italian","japanese","kenyan","malaysian","mexican",
+  "moroccan","polish","portuguese","russian","spanish","thai","tunisian","turkish","vietnamese"];
+// Map user-friendly shorthand to TheMealDB area names
+var AREA_ALIASES = {asian:"Chinese",chinese:"Chinese",japanese:"Japanese",thai:"Thai",
+  indian:"Indian",italian:"Italian",mexican:"Mexican",french:"French",greek:"Greek",
+  spanish:"Spanish",american:"American",british:"British",moroccan:"Moroccan",
+  vietnamese:"Vietnamese",korean:"Japanese"};
+
 async function findRecipeFromWeb(query, isSurprise){
   var type = state.findRecipeType;
   var progressEl = document.getElementById("find-recipe-progress");
@@ -1959,50 +1982,98 @@ async function findRecipeFromWeb(query, isSurprise){
   showProgress();
   setStatus(isSurprise ? "Finding something to surprise you…" : "Searching for \""+query+"\"…");
 
-  // TheMealDB and TheCocktailDB both support CORS — try direct first (fastest).
-  // Fall back to proxies only if direct fetch fails.
   async function tryFetch(url){
-    try{
-      var r = await fetch(url);
-      if (r.ok){ var d = await r.json(); return d; }
-    }catch(e){}
-    for (var i=0; i<2; i++){
-      var proxy = i===0
-        ? "https://corsproxy.io/?url="+encodeURIComponent(url)
-        : "https://api.allorigins.win/raw?url="+encodeURIComponent(url);
-      try{
-        var r = await fetch(proxy);
-        if (r.ok){ var t = await r.text(); if (t&&t.length>10) return JSON.parse(t); }
-      }catch(e){}
+    try{ var r=await fetch(url); if(r.ok) return await r.json(); }catch(e){}
+    for (var i=0;i<2;i++){
+      var proxy=i===0?"https://corsproxy.io/?url=":"https://api.allorigins.win/raw?url=";
+      try{ var r=await fetch(proxy+encodeURIComponent(url)); if(r.ok){var t=await r.text(); if(t&&t.length>10) return JSON.parse(t);} }catch(e){}
     }
     throw new Error("Network error");
   }
+
   try{
-    var draft;
     if (type==="cocktail"){
-      var url = isSurprise||!query.trim()
-        ? "https://www.thecocktaildb.com/api/json/v1/1/random.php"
-        : "https://www.thecocktaildb.com/api/json/v1/1/search.php?s="+encodeURIComponent(query);
-      var data = await tryFetch(url);
-      if (!data.drinks||!data.drinks.length){ hideProgress(); setStatus("No cocktail found — try different keywords."); return; }
-      draft = parseCocktailDBRecipe(data.drinks[0]);
+      if (isSurprise||!query.trim()){
+        // Surprise: show 6 random cocktails
+        var results=[];
+        for(var i=0;i<6;i++){
+          try{ var d=await tryFetch("https://www.thecocktaildb.com/api/json/v1/1/random.php");
+            if(d.drinks&&d.drinks[0]) results.push({id:d.drinks[0].idDrink,name:d.drinks[0].strDrink,thumb:d.drinks[0].strDrinkThumb,type:"cocktail"}); }catch(e){}
+        }
+        hideProgress(); state.findRecipeResults=results; render();
+      } else {
+        var data=await tryFetch("https://www.thecocktaildb.com/api/json/v1/1/search.php?s="+encodeURIComponent(query));
+        if(!data.drinks||!data.drinks.length){ hideProgress(); setStatus("No cocktail found — try different keywords."); return; }
+        var results=data.drinks.slice(0,6).map(function(d){return{id:d.idDrink,name:d.strDrink,thumb:d.strDrinkThumb,type:"cocktail"};});
+        hideProgress(); state.findRecipeResults=results; render();
+      }
     } else {
-      var url = isSurprise||!query.trim()
-        ? "https://www.themealdb.com/api/json/v1/1/random.php"
-        : "https://www.themealdb.com/api/json/v1/1/search.php?s="+encodeURIComponent(query);
-      var data = await tryFetch(url);
-      if (!data.meals||!data.meals.length){ hideProgress(); setStatus("No recipe found — try different keywords."); return; }
-      draft = parseMealDBRecipe(data.meals[0]);
+      if (isSurprise||!query.trim()){
+        // Surprise: 6 random meals
+        var results=[];
+        for(var i=0;i<6;i++){
+          try{ var d=await tryFetch("https://www.themealdb.com/api/json/v1/1/random.php");
+            if(d.meals&&d.meals[0]) results.push({id:d.meals[0].idMeal,name:d.meals[0].strMeal,thumb:d.meals[0].strMealThumb,type:"meal"}); }catch(e){}
+        }
+        hideProgress(); state.findRecipeResults=results; render();
+      } else {
+        // Try area/cuisine filter first (e.g. "Mexican", "Asian")
+        var q=query.trim();
+        var areaKey=AREA_ALIASES[q.toLowerCase()]||null;
+        if (!areaKey && MEAL_AREAS.indexOf(q.toLowerCase())>-1) areaKey=q;
+        var results=[];
+        if (areaKey){
+          var d=await tryFetch("https://www.themealdb.com/api/json/v1/1/filter.php?a="+encodeURIComponent(areaKey));
+          if(d.meals) results=d.meals.slice(0,8).map(function(m){return{id:m.idMeal,name:m.strMeal,thumb:m.strMealThumb,type:"meal"};});
+        }
+        // If no area results, fall back to name search
+        if(!results.length){
+          var d=await tryFetch("https://www.themealdb.com/api/json/v1/1/search.php?s="+encodeURIComponent(q));
+          if(d.meals) results=d.meals.slice(0,8).map(function(m){return{id:m.idMeal,name:m.strMeal,thumb:m.strMealThumb||"",type:"meal"};});
+        }
+        if(!results.length){ hideProgress(); setStatus("No recipes found — try a different keyword like \"chicken\", \"Mexican\", or \"pasta\"."); return; }
+        hideProgress(); state.findRecipeResults=results; render();
+      }
     }
-    hideProgress();
-    state.importDraft = draft;
-    state.formState = {mode:"add", recipeId:null, ingRows:draft.ingredients.length||4};
-    state.findRecipeMode = false;
-    render();
   }catch(e){
     hideProgress();
     setStatus("Couldn't connect right now — check your connection and try again.");
     console.error("Find recipe error:", e);
+  }
+}
+
+// User picks a result from the grid — fetch full recipe and open edit form
+async function selectFindResult(id, type){
+  var progressEl=document.getElementById("find-recipe-progress");
+  var statusEl=document.getElementById("find-recipe-status");
+  function setStatus(msg){ if(statusEl) statusEl.textContent=msg; }
+  function showProg(){ if(progressEl) progressEl.style.display="block"; }
+  function hideProg(){ if(progressEl) progressEl.style.display="none"; }
+  showProg(); setStatus("Loading recipe…");
+  async function tryFetch(url){
+    try{ var r=await fetch(url); if(r.ok) return await r.json(); }catch(e){}
+    try{ var r=await fetch("https://corsproxy.io/?url="+encodeURIComponent(url)); if(r.ok){var t=await r.text();if(t) return JSON.parse(t);} }catch(e){}
+    throw new Error("Network error");
+  }
+  try{
+    var draft;
+    if(type==="cocktail"){
+      var d=await tryFetch("https://www.thecocktaildb.com/api/json/v1/1/lookup.php?i="+id);
+      if(!d.drinks||!d.drinks[0]) throw new Error("Not found");
+      draft=parseCocktailDBRecipe(d.drinks[0]);
+    } else {
+      var d=await tryFetch("https://www.themealdb.com/api/json/v1/1/lookup.php?i="+id);
+      if(!d.meals||!d.meals[0]) throw new Error("Not found");
+      draft=parseMealDBRecipe(d.meals[0]);
+    }
+    hideProg(); setStatus("");
+    state.importDraft=draft;
+    state.formState={mode:"add",recipeId:null,ingRows:draft.ingredients.length||4};
+    state.findRecipeMode=false; state.findRecipeResults=[];
+    render();
+  }catch(e){
+    hideProg(); setStatus("Couldn't load that recipe — try another.");
+    console.error(e);
   }
 }
 
@@ -2813,8 +2884,26 @@ function removeFromWeek(id){
 }
 function clearWeek(){
   if (!state.week.length) return;
+  // Record what was cooked this week
+  var now = new Date().toISOString();
+  state.week.forEach(function(entry){
+    var r = findRecipe(entry.id);
+    if (!r) return;
+    // Keep last 20 cooked recipes
+    state.recentlyMade = state.recentlyMade.filter(function(x){ return x.id!==entry.id; });
+    state.recentlyMade.unshift({id:entry.id, name:r.name, date:now});
+    if (state.recentlyMade.length>20) state.recentlyMade.length=20;
+    // Auto-add pantry/spice ingredients to pantry (non-perishables likely have leftovers)
+    var pantryCategories = ["Pantry & Dry Goods","Condiments & Sauces","Spices & Seasonings","Spirits & Mixers"];
+    (r.ingredients||[]).forEach(function(ing){
+      if (pantryCategories.indexOf(ing.category)>-1 && !isInPantry(ing.name)){
+        state.pantry.push({id:"p"+Date.now()+Math.random(), name:ing.name, category:ing.category});
+      }
+    });
+  });
   state.week = [];
   saveWeek();
+  savePrivateState();
   render();
 }
 
@@ -3002,6 +3091,18 @@ function removeStaple(id){
 /* =========================================================
    SHOPPING LIST BUILD
    ========================================================= */
+var UNIT_NORM_MAP = {
+  cups:"cup",tablespoons:"tbsp",tablespoon:"tbsp",teaspoons:"tsp",teaspoon:"tsp",
+  ounces:"oz",ounce:"oz",pounds:"lb",lbs:"lb",pound:"lb",
+  grams:"g",gram:"g",kilograms:"kg",kilogram:"kg",
+  milliliters:"ml",milliliter:"ml",liters:"l",liter:"l",
+  cloves:"clove",heads:"head",sticks:"stick",cans:"can",jars:"jar",
+  slices:"slice",sprigs:"sprig",bunches:"bunch",pieces:"piece",sheets:"sheet"
+};
+function normalizeUnit(u){
+  var w=(u||"").toLowerCase().replace(/\.$/,"");
+  return UNIT_NORM_MAP[w]||w;
+}
 function buildShoppingMap(){
   var map = {};
   state.week.forEach(function(entry){
@@ -3009,9 +3110,17 @@ function buildShoppingMap(){
     if (!r) return;
     var mult = entry.batches||1;
     r.ingredients.forEach(function(ing){
-      var key = ing.name.toLowerCase()+"|"+(ing.unit||"").toLowerCase();
-      if (!map[key]) map[key] = {name:ing.name, unit:ing.unit, amount:0, category:ing.category||"Other", toTaste:false};
-      if (ing.amount===null||ing.amount===undefined){ map[key].toTaste = true; }
+      // Use normalized name + unit as key so "garlic, minced" and "garlic" combine
+      var normName = baseIngName(ing.name);
+      var normUnit = normalizeUnit(ing.unit||"");
+      var key = normName+"|"+normUnit;
+      if (!map[key]) map[key] = {
+        name:ing.name, unit:ing.unit, amount:0,
+        category:ing.category||"Other", toTaste:false
+      };
+      // Keep the more descriptive display name
+      if (ing.name.length > map[key].name.length) map[key].name = ing.name;
+      if (ing.amount===null||ing.amount===undefined){ map[key].toTaste=true; }
       else { map[key].amount += ing.amount*mult; }
     });
   });
@@ -3037,6 +3146,7 @@ function render(){
   if (state.tab==="week") html += renderWeekTab();
   if (state.tab==="shopping") html += renderShoppingTab();
   if (state.tab==="staples") html += renderStaplesTab();
+  if (state.tab==="cocktails") html += renderCocktailsTab();
   if (state.tab==="community") html += renderCommunityTab();
   html += '</div>';
   if (state.formState){
@@ -3239,27 +3349,42 @@ function renderMealPlanModal(){
 
 function renderFindRecipeModal(){
   var isFood = state.findRecipeType==="food";
-  return '<div class="overlay" onclick="if(event.target===this) closeFindRecipe()"><div class="modal">'+
+  var results = state.findRecipeResults;
+
+  var header = '<div class="overlay" onclick="if(event.target===this) closeFindRecipe()"><div class="modal">'+
     '<button class="modal-close" onclick="closeFindRecipe()">×</button>'+
     '<div class="modal-scroll">'+
     '<div class="modal-head"><h2>Find a Recipe</h2>'+
-    '<div class="rcard-meta">Discover something new from across the internet</div></div>'+
+    '<div class="rcard-meta">Search by keyword, cuisine, or hit Surprise Me</div></div>'+
     '<div class="modal-body">'+
-    '<div style="display:flex;gap:8px;margin-bottom:18px;">'+
+    '<div style="display:flex;gap:8px;margin-bottom:14px;">'+
     '<button class="chip'+(isFood?" active":"")+'" onclick="setFindRecipeType(\'food\')">🍽 Food</button>'+
     '<button class="chip'+(!isFood?" active":"")+'" onclick="setFindRecipeType(\'cocktail\')">🍹 Cocktail</button>'+
     '</div>'+
-    '<div class="field"><label>What are you in the mood for?</label>'+
-    '<input type="text" id="find-recipe-input" placeholder="'+(isFood?"e.g. chicken pasta, tacos, soup":"e.g. margarita, old fashioned, tiki")+'" onkeydown="if(event.key===\'Enter\') findRecipeFromWeb(this.value, false)">'+
+    '<div style="display:flex;gap:8px;margin-bottom:8px;">'+
+    '<input type="text" id="find-recipe-input" style="flex:1;" placeholder="'+(isFood?"e.g. Mexican, chicken, pasta":"e.g. margarita, rum, tiki")+'" onkeydown="if(event.key===\'Enter\') findRecipeFromWeb(this.value,false)">'+
+    '<button class="btn" onclick="findRecipeFromWeb(document.getElementById(\'find-recipe-input\').value,false)">Search</button>'+
     '</div>'+
-    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">'+
-    '<button class="btn" onclick="findRecipeFromWeb(document.getElementById(\'find-recipe-input\').value, false)">Find Recipe →</button>'+
-    '<button class="btn secondary" onclick="findRecipeFromWeb(\'\', true)">🎲 Surprise Me</button>'+
-    '</div>'+
+    '<button class="btn secondary" onclick="findRecipeFromWeb(\'\',true)" style="width:100%;margin-bottom:10px;">🎲 Surprise Me</button>'+
     '<div class="progress-bar" id="find-recipe-progress" style="display:none;"><div class="progress-bar-fill"></div></div>'+
-    '<div id="find-recipe-status" style="font-size:13px;color:var(--text-soft);min-height:18px;margin-top:4px;"></div>'+
-    '<div style="font-size:12px;color:var(--text-muted);margin-top:12px;">Pulls real recipes from TheMealDB and TheCocktailDB. You\'ll get to review and edit before saving.</div>'+
-    '</div></div></div></div>';
+    '<div id="find-recipe-status" style="font-size:13px;color:var(--text-soft);min-height:18px;margin-top:4px;"></div>';
+
+  if (results.length){
+    header += '<div style="margin-top:16px;border-top:1px solid var(--border-mid);padding-top:14px;">'+
+      '<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--amber-lo);margin-bottom:10px;">'+results.length+' results — tap one to import</div>'+
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">';
+    results.forEach(function(r){
+      header += '<div onclick="selectFindResult(\''+r.id+'\',\''+r.type+'\')" style="background:var(--bg-raised);border:1px solid var(--border-mid);border-radius:var(--radius);overflow:hidden;cursor:pointer;transition:border-color .12s;" onmouseover="this.style.borderColor=\'var(--amber)\'" onmouseout="this.style.borderColor=\'var(--border-mid)\'">'+
+        (r.thumb?'<img src="'+r.thumb+'/preview" alt="" style="width:100%;height:90px;object-fit:cover;display:block;">':'')+
+        '<div style="padding:8px 10px;font-size:13px;font-weight:500;color:var(--text);line-height:1.3;">'+escapeHtml(r.name)+'</div>'+
+        '</div>';
+    });
+    header += '</div></div>';
+  } else {
+    header += '<div style="font-size:12px;color:var(--text-muted);margin-top:8px;">Try: "Mexican", "Italian", "chicken", "pasta", "margarita"…</div>';
+  }
+
+  return header+'</div></div></div></div>';
 }
 
 function renderHero(){
@@ -3274,11 +3399,12 @@ function renderTabs(){
   var itemCount = Object.keys(map).length + state.staples.length;
 
   var TABS = [
-    {key:"recipes",  icon:"📖", label:"Recipes",  count:allRecipes().length},
-    {key:"week",     icon:"📅", label:"This Week", count:wc},
-    {key:"shopping", icon:"🛒", label:"Shop",      count:itemCount},
-    {key:"staples",  icon:"📌", label:"Staples",   count:state.staples.length},
-    {key:"community",icon:"🌐", label:"Community", count:state.publicRecipes.length}
+    {key:"recipes",   icon:"📖", label:"Food",      count:allRecipes().length},
+    {key:"cocktails", icon:"🍹", label:"Cocktails",  count:allCocktails().length},
+    {key:"week",      icon:"📅", label:"Week",       count:wc},
+    {key:"shopping",  icon:"🛒", label:"Shop",       count:itemCount},
+    {key:"staples",   icon:"📌", label:"Staples",    count:state.staples.length},
+    {key:"community", icon:"🌐", label:"Community",  count:state.publicRecipes.length}
   ];
 
   // Desktop tab row
@@ -3292,7 +3418,7 @@ function renderTabs(){
     ' &middot; <a href="#" onclick="openSettings();return false;">Settings</a>'+
     ' &middot; <a href="#" onclick="signOutUser();return false;">Sign out</a></div>';
 
-  // Mobile bottom tab bar
+  // Mobile bottom tab bar — 6 tabs, shorter labels, smaller text handled in CSS
   html += '<div class="tab-bar-mobile">';
   TABS.forEach(function(t){
     var active = state.tab===t.key;
@@ -3311,6 +3437,62 @@ function tabBtn(key,label,count){
   var cls = "tab-btn"+(state.tab===key?" active":"");
   return '<button class="'+cls+'" onclick="setTab(\''+key+'\')">'+escapeHtml(label)+' <span class="count">'+count+'</span></button>';
 }
+
+function renderCocktailsTab(){
+  var list = allCocktails();
+  var html = '<div class="toolbar">'+
+    '<input class="search-input" type="text" placeholder="Search cocktails…" value="'+escapeHtml(state.search)+'" oninput="setSearch(this.value)">'+
+    '<button class="btn secondary" onclick="setFindRecipeType(\'cocktail\');openFindRecipe()">🍹 Find a Cocktail</button>'+
+    '<button class="btn" onclick="openAddForm()">+ Add</button>'+
+    '</div>';
+
+  // Filter chips for cocktail styles
+  var cocktailTags = ["Tiki","Classic","Quick"];
+  html += '<div class="chip-row">'+
+    cocktailTags.map(function(t){
+      var active = state.activeTags.indexOf(t)>-1;
+      return '<button class="chip'+(active?" active":"")+'" onclick="toggleTag(\''+escapeHtml(t)+'\')">'+escapeHtml(t)+'</button>';
+    }).join("")+'</div>';
+
+  // Filter list
+  var filtered = list.filter(function(r){
+    var q = state.search.toLowerCase();
+    if (q && r.name.toLowerCase().indexOf(q)===-1) return false;
+    if (state.activeTags.length){
+      if (!state.activeTags.every(function(t){ return (r.tags||[]).indexOf(t)>-1; })) return false;
+    }
+    return true;
+  });
+
+  if (!filtered.length){
+    html += '<div class="empty"><span class="big">No cocktails found</span>Add your own or use "Find a Cocktail" to discover new ones.</div>';
+    return html;
+  }
+
+  var shareDocsByStarter = {};
+  state.myRecipes.forEach(function(r){ if(r.sourceStarterId) shareDocsByStarter[r.sourceStarterId]=r; });
+
+  html += '<div class="grid">';
+  filtered.forEach(function(r){
+    var added = inWeek(r.id);
+    var shareDoc = shareDocsByStarter[r.id];
+    var isPublicSomehow = !!r.isPublic || !!(shareDoc && shareDoc.isPublic);
+    html += '<div class="rcard" onclick="openRecipe(\''+r.id+'\')">'+
+      '<div class="rcard-top"><div class="rcard-top-inner">'+
+      '<h3>'+escapeHtml(r.name)+'</h3>'+
+      '<div class="rcard-meta">'+escapeHtml(r.time||"")+' &middot; serves '+(r.servings||1)+'</div></div></div>'+
+      '<div class="tagrow">'+
+      (isPublicSomehow?'<span class="tag" style="background:rgba(212,168,83,.2);color:var(--amber-lo);">🌐 Public</span>':'')+
+      (r.tags||[]).filter(function(t){return t!=="Cocktail";}).map(function(t){return '<span class="tag">'+escapeHtml(t)+'</span>';}).join('')+
+      '</div>'+
+      '<div class="rcard-foot"><span class="label">View →</span>'+
+      '<button class="add-btn'+(added?" added":"")+'" onclick="event.stopPropagation();toggleWeek(\''+r.id+'\')">'+(added?"✓ Added":"+ This week")+'</button>'+
+      '</div></div>';
+  });
+  html += '</div>';
+  return html;
+}
+
 
 function renderRecipesTab(){
   var html = '<div class="toolbar">'+
