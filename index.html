@@ -497,6 +497,9 @@ input[type=checkbox]{-webkit-appearance:checkbox;appearance:checkbox;}
 .shop-item.checked .shop-amt{color:var(--text-muted);}
 .receipt-actions{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;justify-content:center;}
 
+/* ---- Recipe card image ---- */
+.rcard-img{width:100%;height:150px;object-fit:cover;display:block;border-radius:var(--radius) var(--radius) 0 0;}
+
 /* ---- Progress bar (fetch loading) ---- */
 .progress-bar{height:3px;background:var(--border-mid);border-radius:999px;overflow:hidden;margin:12px 0 4px;}
 .progress-bar-fill{height:100%;background:linear-gradient(90deg,var(--amber-lo),var(--amber),var(--amber-hi),var(--amber));background-size:200% 100%;border-radius:999px;animation:shimmer 1.2s linear infinite;}
@@ -1499,8 +1502,10 @@ var state = {
 
   // Find New Recipe
   findRecipeMode:false,
-  findRecipeType:"food",  // "food" | "cocktail"
-  findRecipeResults:[],   // [{id,name,thumb,type}] — selectable search results
+  findRecipeType:"food",
+  findRecipeResults:[],
+  findRecipeLastQuery:"",
+  findRecipeLastSurprise:false,
 
   // Shopping extras
   oneTimeItems:[],
@@ -1923,8 +1928,9 @@ function setCommunityFilter(f){ state.communityFilter=f; render(); }
 
 /* ---- Find New Recipe (TheMealDB + TheCocktailDB) ---- */
 function openFindRecipe(){ state.findRecipeMode=true; state.modalRecipe=null; state.formState=null; render(); }
-function closeFindRecipe(){ state.findRecipeMode=false; render(); }
-function setFindRecipeType(t){ state.findRecipeType=t; render(); }
+function closeFindRecipe(){ state.findRecipeMode=false; state.findRecipeResults=[]; render(); }
+function setFindRecipeType(t){ state.findRecipeType=t; state.findRecipeResults=[]; render(); }
+function refreshFindResults(){ findRecipeFromWeb(state.findRecipeLastQuery, state.findRecipeLastSurprise); }
 
 function parseMealDBRecipe(meal){
   var ingredients = [];
@@ -1940,7 +1946,8 @@ function parseMealDBRecipe(meal){
   if (meal.strCategory) tags.push(meal.strCategory);
   if (meal.strArea) tags.push(meal.strArea);
   return {name:meal.strMeal||"Imported Recipe", time:"", servings:4, tags:tags,
-    kidFriendly:false, kidNote:"", ingredients:ingredients, steps:steps};
+    kidFriendly:false, kidNote:"", ingredients:ingredients, steps:steps,
+    image: meal.strMealThumb||""};
 }
 function parseCocktailDBRecipe(drink){
   var ingredients = [];
@@ -1959,7 +1966,8 @@ function parseCocktailDBRecipe(drink){
   if (drink.strInstructions) steps = drink.strInstructions.split(/\r?\n/).map(function(s){return s.trim();}).filter(Boolean);
   if (!steps.length) steps = ["Combine ingredients in a shaker with ice, shake well, and strain into a glass."];
   return {name:drink.strDrink||"Cocktail", time:"5 min", servings:1, tags:["Cocktail"],
-    kidFriendly:false, kidNote:"", ingredients:ingredients, steps:steps};
+    kidFriendly:false, kidNote:"", ingredients:ingredients, steps:steps,
+    image: drink.strDrinkThumb||""};
 }
 // Areas/cuisines TheMealDB recognises for direct filtering
 var MEAL_AREAS = ["american","british","canadian","chinese","croatian","dutch","egyptian",
@@ -1978,6 +1986,10 @@ async function findRecipeFromWeb(query, isSurprise){
   function setStatus(msg){ if (statusEl) statusEl.textContent = msg; }
   function showProgress(){ if (progressEl) progressEl.style.display="block"; }
   function hideProgress(){ if (progressEl) progressEl.style.display="none"; }
+
+  // Save for the "More options" refresh button
+  state.findRecipeLastQuery = query;
+  state.findRecipeLastSurprise = isSurprise;
 
   showProgress();
   setStatus(isSurprise ? "Finding something to surprise you…" : "Searching for \""+query+"\"…");
@@ -2757,7 +2769,14 @@ function recipeNodeToDraft(node){
   var time = parseIsoTime(node.totalTime) || "";
   var tags = [];
   if (node.recipeCuisine) tags.push(String(Array.isArray(node.recipeCuisine)?node.recipeCuisine[0]:node.recipeCuisine));
-  return {name:name, ingredients:ingredients, steps:steps, servings:servings, time:time, tags:tags, kidFriendly:false};
+  // Extract image URL from JSON-LD (can be a string, URL object, or array)
+  var image = "";
+  if (node.image){
+    if (typeof node.image==="string") image=node.image;
+    else if (Array.isArray(node.image)) image=typeof node.image[0]==="string"?node.image[0]:(node.image[0]&&node.image[0].url)||"";
+    else if (node.image.url) image=node.image.url;
+  }
+  return {name:name, ingredients:ingredients, steps:steps, servings:servings, time:time, tags:tags, kidFriendly:false, image:image};
 }
 
 async function handleUrlImport(){
@@ -2921,7 +2940,7 @@ function clearChecks(){
 /* ---- Add / edit / remove recipes ---- */
 function openAddForm(){
   state.importDraft = null;
-  state.formState = {mode:"add", recipeId:null, ingRows:4};
+  state.formState = {mode:"add", recipeId:null, ingRows:4, pendingImage:null, existingImage:""};
   state.modalRecipe = null;
   render();
 }
@@ -2929,9 +2948,51 @@ function openEditForm(id){
   var r = findRecipe(id);
   if (!r) return;
   state.importDraft = null;
-  state.formState = {mode:"edit", recipeId:id, ingRows:(r.ingredients||[]).length || 4};
+  state.formState = {mode:"edit", recipeId:id, ingRows:(r.ingredients||[]).length||4,
+    pendingImage:null, existingImage:r.image||""};
   state.modalRecipe = null;
   render();
+}
+
+/* ---- Photo upload (resize in-browser to keep Firestore docs small) ---- */
+function handlePhotoSelect(input){
+  var file = input.files&&input.files[0];
+  if (!file||!file.type.startsWith("image/")) return;
+  var reader = new FileReader();
+  reader.onload = function(e){
+    var img = new Image();
+    img.onload = function(){
+      var canvas = document.createElement("canvas");
+      var MAX = 600;
+      var ratio = Math.min(MAX/img.naturalWidth, MAX/img.naturalHeight, 1);
+      canvas.width  = Math.round(img.naturalWidth  * ratio);
+      canvas.height = Math.round(img.naturalHeight * ratio);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      var dataUrl = canvas.toDataURL("image/jpeg", 0.78);
+      if (!state.formState) return;
+      state.formState.pendingImage = dataUrl;
+      // Update preview in-place without re-rendering the whole form
+      var prev = document.getElementById("recipe-photo-preview");
+      var ph   = document.getElementById("recipe-photo-placeholder");
+      var rm   = document.getElementById("recipe-photo-remove");
+      if (prev){ prev.src=dataUrl; prev.style.display="block"; }
+      if (ph)   ph.style.display="none";
+      if (rm)   rm.style.display="inline-flex";
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+function removeRecipePhoto(){
+  if (!state.formState) return;
+  state.formState.pendingImage = null;
+  state.formState.existingImage = "";
+  var prev = document.getElementById("recipe-photo-preview");
+  var ph   = document.getElementById("recipe-photo-placeholder");
+  var rm   = document.getElementById("recipe-photo-remove");
+  if (prev){ prev.src=""; prev.style.display="none"; }
+  if (ph)   ph.style.display="flex";
+  if (rm)   rm.style.display="none";
 }
 
 function ingRowHtml(ing){
@@ -3013,25 +3074,29 @@ async function submitRecipeForm(ev){
   });
   if (!ingredients.length) return;
 
+  var imageUrl = (fs.pendingImage || fs.existingImage || "");
+  // Limit base64 size — Firestore docs max out at 1MB
+  if (imageUrl.startsWith("data:") && imageUrl.length > 700000) imageUrl = "";
+
   if (fs.mode==="edit" && isOwnedRecipe(fs.recipeId)){
-    // editing one of THIS account's own Firestore-backed recipes
     try{
       await db.collection("recipes").doc(fs.recipeId).update({
         name:name, tags:tags, kidFriendly:kidFriendly, kidNote:kidNote||"",
-        time:time, servings:servings, ingredients:ingredients, steps:steps
+        time:time, servings:servings, ingredients:ingredients, steps:steps,
+        image:imageUrl
       });
     }catch(e){ console.error("Couldn't save recipe:", e); }
   } else if (fs.mode==="edit"){
-    // editing a built-in starter recipe -> personal override, same as before
-    var newRecipe = {id:fs.recipeId, name:name, tags:tags, kidFriendly:kidFriendly, time:time, servings:servings, ingredients:ingredients, steps:steps};
+    var newRecipe = {id:fs.recipeId, name:name, tags:tags, kidFriendly:kidFriendly,
+      time:time, servings:servings, ingredients:ingredients, steps:steps, image:imageUrl};
     if (kidNote) newRecipe.kidNote = kidNote;
     state.recipeEdits[fs.recipeId] = newRecipe;
     saveRecipeEdits();
   } else {
-    // brand new recipe, owned by this account
     var doc = {
       name:name, tags:tags, kidFriendly:kidFriendly, kidNote:kidNote||"",
       time:time, servings:servings, ingredients:ingredients, steps:steps,
+      image:imageUrl,
       ownerId: state.currentUser.uid, ownerName: state.currentUser.displayName || state.currentUser.email,
       isPublic:false, createdAt:new Date().toISOString()
     };
@@ -3371,7 +3436,10 @@ function renderFindRecipeModal(){
 
   if (results.length){
     header += '<div style="margin-top:16px;border-top:1px solid var(--border-mid);padding-top:14px;">'+
-      '<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--amber-lo);margin-bottom:10px;">'+results.length+' results — tap one to import</div>'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'+
+      '<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--amber-lo);">'+results.length+' results — tap one to import</div>'+
+      '<button class="btn secondary" onclick="refreshFindResults()" style="font-size:11px;padding:5px 10px;min-height:30px;">🔄 More options</button>'+
+      '</div>'+
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">';
     results.forEach(function(r){
       header += '<div onclick="selectFindResult(\''+r.id+'\',\''+r.type+'\')" style="background:var(--bg-raised);border:1px solid var(--border-mid);border-radius:var(--radius);overflow:hidden;cursor:pointer;transition:border-color .12s;" onmouseover="this.style.borderColor=\'var(--amber)\'" onmouseout="this.style.borderColor=\'var(--border-mid)\'">'+
@@ -3539,11 +3607,13 @@ function renderRecipeListArea(){
     var shareDocId = state.starterShares[r.id];
     var shareDoc = shareDocId ? state.myRecipes.filter(function(x){return x.id===shareDocId;})[0] : null;
     var isPublicSomehow = !!r.isPublic || !!(shareDoc && shareDoc.isPublic);
+    var img = r.image || "";
     html += '<div class="rcard" onclick="openRecipe(\''+r.id+'\')">'+
+      (img ? '<img class="rcard-img" src="'+escapeHtml(img)+'" alt="" loading="lazy">' : '')+
       '<div class="rcard-top"><div class="rcard-top-inner"><h3>'+escapeHtml(r.name)+'</h3>'+
       '<div class="rcard-meta">'+escapeHtml(r.time||"")+' &middot; serves '+(r.servings||4)+'</div></div></div>'+
       '<div class="tagrow">'+
-      (isPublicSomehow?'<span class="tag" style="background:var(--sage);color:#fff;">🌐 Public</span>':'')+
+      (isPublicSomehow?'<span class="tag" style="background:rgba(212,168,83,.2);color:var(--amber-lo);">🌐 Public</span>':'')+
       (r.kidFriendly?'<span class="tag kid">Kid-Friendly</span>':'')+
       (r.tags||[]).map(function(t){return '<span class="tag">'+escapeHtml(t)+'</span>';}).join('')+
       '</div>'+
@@ -3568,6 +3638,7 @@ function renderRecipeModal(r){
   var html = '<div class="overlay" onclick="if(event.target===this) closeModal()"><div class="modal">'+
     '<button class="modal-close" onclick="closeModal()">×</button>'+
     '<div class="modal-scroll">'+
+    (r.image ? '<img src="'+escapeHtml(r.image)+'" alt="" style="width:100%;height:200px;object-fit:cover;display:block;">' : '')+
     '<div class="modal-head"><h2>'+escapeHtml(r.name)+
     (owned && r.isPublic ? ' <span style="font-size:14px;font-family:\'Libre Franklin\',sans-serif;font-weight:700;color:var(--sage-dark);">🌐 Public</span>' : '')+
     (isStarter && starterIsPublic ? ' <span style="font-size:14px;font-family:\'Libre Franklin\',sans-serif;font-weight:700;color:var(--sage-dark);">🌐 Public</span>' : '')+
@@ -3866,6 +3937,9 @@ function renderRecipeFormModal(){
   var kidNoteVal = recipe && recipe.kidNote ? recipe.kidNote : "";
   var stepsVal = recipe ? (recipe.steps||[]).join("\n") : "";
 
+  // Determine current image for the photo section
+  var currentImage = (fs.pendingImage || fs.existingImage || (recipe&&recipe.image) || "");
+
   var stepsHtml = "";
   if (recipe && recipe.steps && recipe.steps.length){
     recipe.steps.forEach(function(s){ stepsHtml += stepRowHtml(s); });
@@ -3900,8 +3974,23 @@ function renderRecipeFormModal(){
       '<div id="step-rows">'+stepsHtml+'</div>'+
       '<button type="button" class="btn secondary" onclick="addStepRow()" style="margin-top:6px;font-size:12px;padding:7px 12px;min-height:36px;">+ Add step</button>'+
     '</div>'+
-    '<div class="field"><label>Toddler note <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;opacity:.7;">(optional)</span></label>'+
+    '<div class="field">'+
+      '<label>Toddler note <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;opacity:.7;">(optional)</span></label>'+
       '<input type="text" name="rkidnote" placeholder="e.g. Serve their portion plain before adding sauce" value="'+escapeHtml(kidNoteVal)+'"></div>'+
+    '<div class="field">'+
+      '<label>Photo <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;opacity:.7;">(optional)</span></label>'+
+      '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:4px;">'+
+        (currentImage
+          ? '<img id="recipe-photo-preview" src="'+escapeHtml(currentImage)+'" alt="" style="width:80px;height:60px;object-fit:cover;border-radius:6px;border:1px solid var(--border-mid);">'
+          : '<div id="recipe-photo-placeholder" style="width:80px;height:60px;background:var(--bg-raised);border-radius:6px;border:1.5px dashed var(--border-mid);display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:20px;">📷</div>')+
+        '<div style="display:flex;flex-direction:column;gap:6px;">'+
+          '<input type="file" id="recipe-photo-input" accept="image/*" style="display:none;" onchange="handlePhotoSelect(this)">'+
+          '<button type="button" class="btn secondary" onclick="document.getElementById(\'recipe-photo-input\').click()" style="font-size:12px;padding:7px 12px;min-height:36px;">📷 '+(currentImage?"Change":"Upload")+'</button>'+
+          (currentImage ? '<button id="recipe-photo-remove" type="button" class="btn danger" onclick="removeRecipePhoto()" style="font-size:12px;padding:7px 12px;min-height:36px;display:inline-flex;">Remove</button>' : '<span id="recipe-photo-remove" style="display:none;"></span>')+
+        '</div>'+
+      '</div>'+
+      '<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">JPG/PNG — resized automatically. Works great for imported recipes too.</div>'+
+    '</div>'+
     '<div class="modal-actions"><button type="submit" class="btn">Save recipe</button><button type="button" class="btn secondary" onclick="closeModal()">Cancel</button></div>'+
     '</form></div></div></div></div>';
   return html;
