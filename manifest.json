@@ -1,29 +1,29 @@
 {
   "name": "Mise",
   "short_name": "Mise",
-  "description": "Mise — your shared kitchen. Recipes, weekly planning, and shopping lists.",
-  "start_url": "/Family-Cookbook/",
-  "scope": "/Family-Cookbook/",
+  "description": "Discover recipes, plan your week, and build your grocery list — all in one place.",
+  "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#0d0d12",
   "theme_color": "#0d0d12",
   "icons": [
     {
-      "src": "/Family-Cookbook/icon-192.png",
+      "src": "/icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "/Family-Cookbook/icon-512.png",
+      "src": "/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
     }
   ],
   "share_target": {
-    "action": "/Family-Cookbook/",
+    "action": "/",
     "method": "GET",
     "params": {
       "title": "shared_title",
@@ -35,13 +35,18 @@
   "shortcuts": [
     {
       "name": "This Week",
-      "url": "/Family-Cookbook/?tab=week",
-      "description": "View and plan this week's meals"
+      "url": "/?tab=week",
+      "description": "Plan this week's meals"
     },
     {
       "name": "Shopping List",
-      "url": "/Family-Cookbook/?tab=shopping",
-      "description": "View the grocery list"
+      "url": "/?tab=shopping",
+      "description": "View your grocery list"
+    },
+    {
+      "name": "Find a Recipe",
+      "url": "/?find=1",
+      "description": "Discover something new to cook"
     }
   ]
 }

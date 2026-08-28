@@ -17,7 +17,7 @@
 <!-- Android / general -->
 <meta name="theme-color" content="#0d0d12">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="description" content="Mise — your shared kitchen. Recipes, weekly planning, and shopping lists with friends.">
+<meta name="description" content="Mise — discover recipes, plan your week, and build your grocery list. Cook more, stress less.">
 
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Caveat:wght@500;600;700&family=Libre+Franklin:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
@@ -499,6 +499,29 @@ input[type=checkbox]{-webkit-appearance:checkbox;appearance:checkbox;}
 
 /* ---- Recipe card image ---- */
 .rcard-img{width:100%;height:150px;object-fit:cover;display:block;border-radius:var(--radius) var(--radius) 0 0;}
+
+/* ---- Cook Mode — full-screen kitchen view ---- */
+.cook-mode{position:fixed;inset:0;z-index:100;background:var(--bg-deep);display:flex;flex-direction:column;padding:var(--safe-top) 0 0;}
+.cook-header{display:flex;align-items:center;gap:8px;padding:14px 16px;border-bottom:1px solid var(--border-mid);flex-shrink:0;}
+.cook-exit,.cook-ings-btn{background:var(--bg-raised);border:1px solid var(--border-mid);color:var(--text-soft);font-size:16px;cursor:pointer;width:38px;height:38px;border-radius:50%;flex-shrink:0;}
+.cook-title{flex:1;font-family:'Caveat',cursive;font-size:22px;color:var(--amber);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.cook-progress-wrap{height:3px;background:var(--border-mid);flex-shrink:0;}
+.cook-progress-bar{height:100%;background:var(--amber);transition:width .3s ease;}
+.cook-step-label{text-align:center;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);padding:14px 16px 0;flex-shrink:0;}
+.cook-step{flex:1;display:flex;align-items:center;justify-content:center;padding:24px 28px;font-size:clamp(18px,5vw,26px);line-height:1.65;color:var(--text);text-align:center;overflow-y:auto;}
+.cook-nav{display:flex;gap:10px;padding:14px 16px calc(14px + var(--safe-bottom));border-top:1px solid var(--border-mid);flex-shrink:0;}
+.cook-btn{flex:1;padding:16px;font-family:'Libre Franklin',sans-serif;font-size:16px;font-weight:800;border:2px solid var(--border-strong);background:var(--bg-raised);color:var(--text);border-radius:var(--radius);cursor:pointer;min-height:56px;}
+.cook-btn:disabled{opacity:.3;}
+.cook-prev{flex:0 0 auto;width:110px;}
+.cook-next{background:var(--amber);border-color:var(--amber);color:var(--bg-deep);}
+.cook-done{background:var(--green);border-color:var(--green);color:#fff;}
+.cook-ings-panel{position:absolute;bottom:0;left:0;right:0;background:var(--bg-card);border-top:2px solid var(--border-mid);padding:20px 20px calc(20px + var(--safe-bottom));max-height:65vh;overflow-y:auto;}
+.cook-ing-item{padding:9px 0;border-bottom:1px solid var(--border);font-size:15px;color:var(--text);display:flex;gap:10px;}
+.cook-ing-amt{font-family:'JetBrains Mono',monospace;font-weight:700;color:var(--amber-lo);min-width:90px;font-size:13px;}
+
+/* ---- Like button ---- */
+.like-btn{transition:all .12s;}
+.like-btn.liked,.like-active{color:#e05555 !important;border-color:#7a2020 !important;}
 
 /* ---- Progress bar (fetch loading) ---- */
 .progress-bar{height:3px;background:var(--border-mid);border-radius:999px;overflow:hidden;margin:12px 0 4px;}
@@ -1521,7 +1544,13 @@ var state = {
   mealPlanMode:false,
   mealPlanDraft:null,     // [{day,name,time,isNew,reason}]
   mealPlanPrefs:{diet:"", maxTime:45, people:4, notes:""},
-  nutritionCache:{}       // recipeId -> {calories,protein,carbs,fat}
+  nutritionCache:{},      // recipeId -> {calories,protein,carbs,fat}
+
+  // Cook Mode
+  cookMode:null,          // {recipeId, step, showIngredients, wakeLock}
+
+  // Social engagement
+  likedRecipes:{}         // recipeId -> true (recipes this user has liked)
 };
 
 function mergedStarter(base){
@@ -1604,6 +1633,7 @@ function attachUserListeners(uid){
       state.oneTimeItems = d.oneTimeItems || [];
       state.pantry = d.pantry || [];
       state.recentlyMade = d.recentlyMade || [];
+      state.likedRecipes = d.likedRecipes || {};
       state.anthropicApiKey = d.anthropicApiKey || "";
       state.nutritionCache = d.nutritionCache || {};
       state.staples = (d.staples && d.staples.length) ? d.staples : DEFAULT_STAPLES.slice();
@@ -1652,6 +1682,7 @@ async function savePrivateState(){
       oneTimeItems: state.oneTimeItems,
       pantry: state.pantry,
       recentlyMade: state.recentlyMade,
+      likedRecipes: state.likedRecipes,
       anthropicApiKey: state.anthropicApiKey,
       nutritionCache: state.nutritionCache
     }, {merge:true});
@@ -2358,6 +2389,57 @@ async function importFromSocial(){
   }catch(e){
     hideProg(); setStatus("Error: "+(e.message||"Try again"));
   }
+}
+
+/* ---- Cook Mode ---- */
+async function openCookMode(recipeId){
+  var r = findRecipe(recipeId);
+  if (!r || !(r.steps||[]).length) return;
+  state.cookMode = {recipeId:recipeId, step:0, showIngredients:false, wakeLock:null};
+  state.modalRecipe = null;
+  // Wake Lock API — keeps screen on while cooking
+  if ('wakeLock' in navigator){
+    try{ state.cookMode.wakeLock = await navigator.wakeLock.request('screen'); }
+    catch(e){ console.log('Wake lock unavailable:', e); }
+  }
+  render();
+}
+function closeCookMode(){
+  if (state.cookMode && state.cookMode.wakeLock){
+    try{ state.cookMode.wakeLock.release(); }catch(e){}
+  }
+  state.cookMode = null;
+  render();
+}
+function cookNext(){
+  var r = findRecipe(state.cookMode.recipeId);
+  if (r && state.cookMode.step < (r.steps||[]).length-1){ state.cookMode.step++; render(); }
+}
+function cookPrev(){
+  if (state.cookMode.step > 0){ state.cookMode.step--; render(); }
+}
+function cookToggleIngredients(){ state.cookMode.showIngredients=!state.cookMode.showIngredients; render(); }
+
+/* ---- Likes ---- */
+async function toggleLike(recipeId, ev){
+  if (ev) ev.stopPropagation();
+  var wasLiked = !!state.likedRecipes[recipeId];
+  // Optimistic update
+  if (wasLiked) delete state.likedRecipes[recipeId]; else state.likedRecipes[recipeId]=true;
+  savePrivateState();
+  render();
+  try{
+    await db.collection("recipes").doc(recipeId).update({
+      likes: firebase.firestore.FieldValue.increment(wasLiked ? -1 : 1)
+    });
+  }catch(e){
+    // Revert on failure
+    if (wasLiked) state.likedRecipes[recipeId]=true; else delete state.likedRecipes[recipeId];
+    savePrivateState(); render();
+  }
+}
+function getLikeCount(r){
+  return r && r.likes ? r.likes : 0;
 }
 
 function getShareLink(id){
@@ -3202,6 +3284,11 @@ function render(){
     attachFormHandler();
     return;
   }
+  // Cook Mode takes over the whole screen
+  if (state.cookMode){
+    app.innerHTML = renderCookMode();
+    return;
+  }
   var html = "";
   html += renderHero();
   html += '<div class="wrap">';
@@ -3304,7 +3391,10 @@ function renderCommunityTab(){
       (r.tags||[]).map(function(t){return '<span class="tag">'+escapeHtml(t)+'</span>';}).join('')+
       '</div>'+
       '<div class="rcard-foot"><span class="label">View →</span>'+
-      (mine ? '<span class="add-btn added">Yours</span>' : '<button class="add-btn" onclick="event.stopPropagation();saveCommunityCopy(\''+r.id+'\')">Save a copy</button>')+
+      (mine ? '<span class="add-btn added">Yours</span>' :
+        '<button class="add-btn like-btn'+(!!state.likedRecipes[r.id]?" liked":"")+'" onclick="event.stopPropagation();toggleLike(\''+r.id+'\',event)">'+
+        (state.likedRecipes[r.id]?"❤️":"🤍")+' '+(r.likes||0)+
+        '</button>')+
       '</div></div>';
   });
   html += '</div>';
@@ -3453,6 +3543,56 @@ function renderFindRecipeModal(){
   }
 
   return header+'</div></div></div></div>';
+}
+
+function renderCookMode(){
+  var cm = state.cookMode;
+  var r = findRecipe(cm.recipeId);
+  if (!r) return '<div class="cook-mode"><button onclick="closeCookMode()">Exit</button></div>';
+  var steps = r.steps||[];
+  var step = steps[cm.step]||"";
+  var isLast = cm.step >= steps.length-1;
+  var isFirst = cm.step === 0;
+  var pct = Math.round(((cm.step+1)/steps.length)*100);
+
+  var html = '<div class="cook-mode">'+
+    // Header
+    '<div class="cook-header">'+
+    '<button class="cook-exit" onclick="closeCookMode()" title="Exit cook mode">✕</button>'+
+    '<span class="cook-title">'+escapeHtml(r.name)+'</span>'+
+    '<button class="cook-ings-btn" onclick="cookToggleIngredients()" title="Show ingredients">📋</button>'+
+    '</div>'+
+    // Progress bar
+    '<div class="cook-progress-wrap">'+
+    '<div class="cook-progress-bar" style="width:'+pct+'%"></div>'+
+    '</div>'+
+    '<div class="cook-step-label">Step '+(cm.step+1)+' of '+steps.length+'</div>'+
+    // Step text
+    '<div class="cook-step">'+escapeHtml(step)+'</div>'+
+    // Navigation
+    '<div class="cook-nav">'+
+    '<button class="cook-btn cook-prev" onclick="cookPrev()" '+(isFirst?'disabled':'')+'>← Back</button>'+
+    (isLast
+      ? '<button class="cook-btn cook-done" onclick="closeCookMode()">✓ Done!</button>'
+      : '<button class="cook-btn cook-next" onclick="cookNext()">Next →</button>')+
+    '</div>';
+
+  // Ingredients slide-up panel
+  if (cm.showIngredients){
+    html += '<div class="cook-ings-panel">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'+
+      '<h3 style="font-family:\'Caveat\',cursive;font-size:24px;color:var(--amber);margin:0;">Ingredients</h3>'+
+      '<button onclick="cookToggleIngredients()" style="background:none;border:none;font-size:22px;cursor:pointer;color:var(--text-soft);">×</button>'+
+      '</div>';
+    r.ingredients.forEach(function(i){
+      var amt = i.amount===null?i.unit||"to taste":formatAmount(i.amount)+" "+(i.unit||"");
+      html += '<div class="cook-ing-item"><span class="cook-ing-amt">'+escapeHtml(amt)+'</span>'+escapeHtml(i.name)+'</div>';
+    });
+    html += '</div>';
+  }
+
+  html += '</div>';
+  return html;
 }
 
 function renderHero(){
@@ -3732,16 +3872,24 @@ function renderRecipeModal(r){
   html += '</div>';
 
   html += '<div class="modal-actions">';
+  // Start Cooking — always available if recipe has steps
+  if ((r.steps||[]).length > 0){
+    html += '<button class="btn" onclick="openCookMode(\''+r.id+'\')" style="background:var(--green);border-color:var(--green);">👨‍🍳 Start Cooking</button>';
+  }
   if (owned){
-    html += '<button class="btn" onclick="toggleWeek(\''+r.id+'\')">'+(added?"✓ On this week's list":"+ Add to this week")+'</button>'+
-      '<button class="btn secondary" onclick="openEditForm(\''+r.id+'\')">Edit recipe</button>'+
-      '<button class="btn danger" onclick="removeRecipeFromCookbook(\''+r.id+'\')">Remove from cookbook</button>';
+    html += '<button class="btn secondary" onclick="toggleWeek(\''+r.id+'\')">'+(added?"✓ In this week":"+ Add to week")+'</button>'+
+      '<button class="btn secondary" onclick="openEditForm(\''+r.id+'\')">Edit</button>'+
+      '<button class="btn danger" onclick="removeRecipeFromCookbook(\''+r.id+'\')">Remove</button>';
   } else if (isStarter){
-    html += '<button class="btn" onclick="toggleWeek(\''+r.id+'\')">'+(added?"✓ On this week's list":"+ Add to this week")+'</button>'+
-      '<button class="btn secondary" onclick="openEditForm(\''+r.id+'\')">Edit recipe</button>'+
-      '<button class="btn danger" onclick="removeRecipeFromCookbook(\''+r.id+'\')">Remove from cookbook</button>';
+    html += '<button class="btn secondary" onclick="toggleWeek(\''+r.id+'\')">'+(added?"✓ In this week":"+ Add to week")+'</button>'+
+      '<button class="btn secondary" onclick="openEditForm(\''+r.id+'\')">Edit</button>'+
+      '<button class="btn danger" onclick="removeRecipeFromCookbook(\''+r.id+'\')">Remove</button>';
   } else {
-    html += '<button class="btn" onclick="saveCommunityCopy(\''+r.id+'\')">Save a copy to my cookbook</button>';
+    var liked = !!state.likedRecipes[r.id];
+    var likeCount = getLikeCount(r);
+    html += '<button class="btn secondary '+(liked?"like-active":"")+'" onclick="toggleLike(\''+r.id+'\',event)">'+
+      (liked?"❤️":"🤍")+' '+(likeCount||"Like")+'</button>'+
+      '<button class="btn secondary" onclick="saveCommunityCopy(\''+r.id+'\')">Save a copy</button>';
   }
   html += '<button class="btn secondary" onclick="closeModal()">Close</button>';
   html += '</div>';
