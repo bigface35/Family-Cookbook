@@ -1,0 +1,11 @@
+   [{
+     "relation": ["delegate_permission/common.handle_all_urls"],
+     "target": {
+       "namespace": "android_app",
+       "package_name": "app.cookmise",
+       "sha256_cert_fingerprints": [
+         "B7:55:0A:BA:AD:35:E8:11:63:29:EB:B5:8D:6C:EA:BE:90:75:A7:F3:3B:CE:93:E0:30:05:E0:90:A4:09:68:7D",
+         "1F:F3:99:F9:3B:E7:2A:FE:AD:B1:22:F4:C6:5A:4A:8D:C0:62:66:AC:A0:89:96:08:AF:38:75:42:C9:CE:7A:E4"
+       ]
+     }
+   }]
