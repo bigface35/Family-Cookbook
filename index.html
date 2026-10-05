@@ -1541,6 +1541,8 @@ var state = {
   // AI features (need API key)
   anthropicApiKey:"",     // stored in Firestore private state — never in source code
   showSettings:false,
+  deleteAcct:null,        // {pw, busy, error} while the delete-account dialog is open
+  deletingAccount:false,
   mealPlanMode:false,
   mealPlanDraft:null,     // [{day,name,time,isNew,reason}]
   mealPlanPrefs:{diet:"", maxTime:45, people:4, notes:""},
@@ -1669,7 +1671,7 @@ function attachUserListeners(uid){
 }
 
 async function savePrivateState(){
-  if (!state.currentUser) return;
+  if (!state.currentUser || state.deletingAccount) return;
   try{
     await db.collection("users").doc(state.currentUser.uid).collection("private").doc("state").set({
       recipeEdits: state.recipeEdits,
@@ -1723,6 +1725,75 @@ async function signIn(email, password){
 }
 function signOutUser(){
   auth.signOut();
+}
+
+/* ---- Account deletion (required by Google Play) ---- */
+function openDeleteAccount(){ state.deleteAcct={pw:"",busy:false,error:""}; render(); }
+function closeDeleteAccount(){ if (state.deleteAcct && state.deleteAcct.busy) return; state.deleteAcct=null; render(); }
+async function deleteMyAccount(){
+  var d = state.deleteAcct;
+  if (!d || d.busy || !state.currentUser) return;
+  var user = auth.currentUser;
+  if (!user){ d.error="Please sign in again."; render(); return; }
+  if (!d.pw){ d.error="Enter your password to confirm."; render(); return; }
+  d.busy=true; d.error=""; render();
+  var uid = user.uid;
+  try{
+    // 1. Re-authenticate (Firebase requires a recent login to delete an account)
+    var cred = firebase.auth.EmailAuthProvider.credential(user.email, d.pw);
+    await user.reauthenticateWithCredential(cred);
+  }catch(e){
+    d.busy=false;
+    d.error = (e.code==="auth/wrong-password"||e.code==="auth/invalid-credential"||e.code==="auth/invalid-login-credentials")
+      ? "That password isn't right." : (e.message||"Could not verify your password.");
+    render(); return;
+  }
+  try{
+    // 2. Stop listeners/writes so nothing re-creates data while we delete it
+    state.deletingAccount = true;
+    clearListeners();
+    // 3. Delete all recipes this user owns (private and public), in batches
+    var snap = await db.collection("recipes").where("ownerId","==",uid).get();
+    var docs = snap.docs;
+    for (var i=0;i<docs.length;i+=400){
+      var batch = db.batch();
+      docs.slice(i,i+400).forEach(function(doc){ batch.delete(doc.ref); });
+      await batch.commit();
+    }
+    // 4. Delete private state and profile
+    await db.collection("users").doc(uid).collection("private").doc("state").delete();
+    await db.collection("users").doc(uid).delete();
+    // 5. Delete the sign-in account itself
+    await user.delete();
+    state.deleteAcct=null; state.showSettings=false;
+    state.recipeEdits={}; state.hiddenIds=[]; state.week=[]; state.myRecipes=[]; state.publicRecipes=[];
+    state.deletingAccount=false;
+    state.currentUser=null;
+    render();
+    try{ db.clearPersistence(); }catch(e){}
+  }catch(e){
+    console.error("Delete account failed:", e);
+    state.deletingAccount=false;
+    state.deleteAcct={pw:d.pw,busy:false,error:"Something went wrong deleting your account ("+(e.message||e.code)+"). Some of your data may already be removed — please tap delete again to finish, or email support@cookmise.app."};
+    attachUserListeners(uid);
+    render();
+  }
+}
+function renderDeleteAccountModal(){
+  var d = state.deleteAcct;
+  return '<div class="overlay" onclick="if(event.target===this) closeDeleteAccount()"><div class="modal">'+
+    '<button class="modal-close" onclick="closeDeleteAccount()">×</button>'+
+    '<div class="modal-scroll">'+
+    '<div class="modal-head"><h2>Delete your account?</h2></div>'+
+    '<div class="modal-body">'+
+    '<p style="font-size:14px;line-height:1.6;color:var(--text-soft);margin-bottom:12px;">This permanently deletes your Mise account and everything in it: your recipes (including any you shared to Community), your week plan, shopping list, pantry, likes and saved settings. <strong>This cannot be undone.</strong></p>'+
+    '<div class="field"><label>Confirm with your password</label>'+
+    '<input type="password" autocomplete="current-password" value="'+escapeHtml(d.pw)+'" oninput="state.deleteAcct.pw=this.value" '+(d.busy?'disabled':'')+'></div>'+
+    (d.error?'<div style="color:var(--red,#e0705f);font-size:13px;margin-bottom:10px;">'+escapeHtml(d.error)+'</div>':'')+
+    '<div class="modal-actions">'+
+    '<button class="btn" style="background:#b8432f;border-color:#b8432f;color:#fff;" onclick="deleteMyAccount()" '+(d.busy?'disabled':'')+'>'+(d.busy?'Deleting…':'Permanently delete account')+'</button>'+
+    '<button class="btn secondary" onclick="closeDeleteAccount()" '+(d.busy?'disabled':'')+'>Cancel</button>'+
+    '</div></div></div></div></div>';
 }
 function setAuthView(v){ state.authView = v; state.authError = ""; render(); }
 
@@ -3301,7 +3372,9 @@ function render(){
   if (state.tab==="cocktails") html += renderCocktailsTab();
   if (state.tab==="community") html += renderCommunityTab();
   html += '</div>';
-  if (state.formState){
+  if (state.deleteAcct){
+    html += renderDeleteAccountModal();
+  } else if (state.formState){
     html += renderRecipeFormModal();
   } else if (state.showSettings){
     html += renderSettingsModal();
@@ -3337,6 +3410,9 @@ function renderAuthGate(){
     '<div style="text-align:center;margin-top:14px;font-size:13.5px;color:var(--ink-soft);padding-bottom:4px;">'+
     (isSignup ? 'Already have an account? <a href="#" onclick="setAuthView(\'signin\');return false;" style="color:var(--rule-dark);font-weight:700;">Sign in</a>'
               : 'New here? <a href="#" onclick="setAuthView(\'signup\');return false;" style="color:var(--rule-dark);font-weight:700;">Create an account</a>')+
+    '</div>'+
+    '<div style="text-align:center;margin-top:12px;font-size:12px;color:var(--ink-soft);padding-bottom:4px;">'+
+    (isSignup?'By creating an account you agree to our <a href="/privacy.html" target="_blank" rel="noopener" style="color:var(--rule-dark);">Privacy Policy</a>.':'<a href="/privacy.html" target="_blank" rel="noopener" style="color:var(--rule-dark);">Privacy Policy</a>')+
     '</div>'+
     '</div></div></div>';
 }
@@ -3425,6 +3501,12 @@ function renderSettingsModal(){
     'New accounts include $5 of free credit (~1,600 meal plans).'+
     '</div>'+
     '</div>'+
+
+    '<div style="border-top:1px solid var(--border-mid);margin-top:18px;padding-top:14px;font-size:13px;line-height:1.9;">'+
+    '<a href="/privacy.html" target="_blank" rel="noopener" style="color:var(--amber);">Privacy policy</a> &middot; '+
+    '<a href="/delete-account.html" target="_blank" rel="noopener" style="color:var(--amber);">Account &amp; data deletion</a>'+
+    '</div>'+
+    '<div style="margin-top:12px;"><button class="btn secondary" style="color:#e0705f;border-color:#e0705f;" onclick="openDeleteAccount()">Delete account…</button></div>'+
 
     '<div class="modal-actions">'+
     '<button class="btn secondary" onclick="closeSettings()">Done</button>'+
