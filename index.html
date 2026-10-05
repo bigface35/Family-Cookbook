@@ -317,6 +317,20 @@ input[type=checkbox]{-webkit-appearance:checkbox;appearance:checkbox;}
 .empty .big{font-family:'Caveat',cursive;font-size:32px;color:var(--text);display:block;margin-bottom:6px;}
 
 /* ---- Modal ---- */
+
+/* ---- First-launch tour ---- */
+.tour{position:fixed;inset:0;z-index:200;background:var(--bg,#0d0d12);display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:max(20px,env(safe-area-inset-top)) 24px max(24px,env(safe-area-inset-bottom));text-align:center;overflow-y:auto;}
+.tour-skip{align-self:flex-end;background:none;border:none;color:var(--text-muted);font-size:14px;font-weight:700;padding:10px 4px;cursor:pointer;}
+.tour-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;max-width:420px;width:100%;gap:14px;}
+.tour-art{width:200px;height:200px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:92px;position:relative;margin-bottom:10px;background:radial-gradient(circle at 30% 25%,rgba(212,168,83,.28),rgba(212,168,83,.04) 70%);border:1px solid var(--border-mid);}
+.tour-art .orbit{position:absolute;font-size:34px;}
+.tour h2{font-size:28px;margin:0;color:var(--text);line-height:1.15;}
+.tour p{font-size:16px;line-height:1.55;color:var(--text-soft);margin:0;}
+.tour-dots{display:flex;gap:8px;margin:6px 0 18px;}
+.tour-dots span{width:8px;height:8px;border-radius:50%;background:var(--border-mid);}
+.tour-dots span.on{background:var(--amber);width:22px;border-radius:4px;}
+.tour-nav{display:flex;gap:10px;width:100%;max-width:420px;}
+.tour-nav .btn{flex:1;min-height:48px;font-size:16px;}
 .overlay{
   position:fixed;inset:0;background:rgba(0,0,0,.7);
   display:flex;align-items:center;justify-content:center;
@@ -673,6 +687,7 @@ input[type=checkbox]{-webkit-appearance:checkbox;appearance:checkbox;}
 </head>
 <body>
 <div id="app"></div>
+<input type="file" id="receipt-file" accept="image/*" style="display:none" onchange="handleReceiptFile(this)">
 
 
 <script src="https://www.gstatic.com/firebasejs/12.15.0/firebase-app-compat.js"></script>
@@ -1539,8 +1554,9 @@ var state = {
   recentlyMade:[],        // [{id,name,date}] — added when a week is cleared
 
   // AI features (need API key)
-  anthropicApiKey:"",     // stored in Firestore private state — never in source code
   showSettings:false,
+  receipt:null,           // {busy, error, store, items:[{name,category,keep}]} while the receipt dialog is open
+  onboarded:false, showTour:false, tourStep:0, privateLoaded:false,
   deleteAcct:null,        // {pw, busy, error} while the delete-account dialog is open
   deletingAccount:false,
   mealPlanMode:false,
@@ -1594,7 +1610,9 @@ var db = firebase.firestore();
 try{ db.enablePersistence({synchronizeTabs:true}); }catch(e){}
 
 var activeUnsubscribers = [];
+var tourOfferedThisSession = false;
 function clearListeners(){
+  tourOfferedThisSession = false;
   activeUnsubscribers.forEach(function(u){ try{ u(); }catch(e){} });
   activeUnsubscribers = [];
 }
@@ -1603,7 +1621,7 @@ function loadState(){
   auth.onAuthStateChanged(function(user){
     clearListeners();
     if (!user){
-      state.currentUser = null;
+      state.currentUser = null; state.showTour = false; state.privateLoaded = false;
       render();
       return;
     }
@@ -1636,7 +1654,7 @@ function attachUserListeners(uid){
       state.pantry = d.pantry || [];
       state.recentlyMade = d.recentlyMade || [];
       state.likedRecipes = d.likedRecipes || {};
-      state.anthropicApiKey = d.anthropicApiKey || "";
+      state.onboarded = !!d.onboarded;
       state.nutritionCache = d.nutritionCache || {};
       state.staples = (d.staples && d.staples.length) ? d.staples : DEFAULT_STAPLES.slice();
       stapleLoaded = true;
@@ -1645,6 +1663,8 @@ function attachUserListeners(uid){
       savePrivateState();
       stapleLoaded = true;
     }
+    state.privateLoaded = true;
+    if (!state.onboarded && !tourOfferedThisSession){ tourOfferedThisSession = true; state.showTour = true; state.tourStep = 0; }
     if (!state.formState) render();
   }, function(err){
     console.error("Private state sync error:", err);
@@ -1685,7 +1705,8 @@ async function savePrivateState(){
       pantry: state.pantry,
       recentlyMade: state.recentlyMade,
       likedRecipes: state.likedRecipes,
-      anthropicApiKey: state.anthropicApiKey,
+      onboarded: state.onboarded,
+      anthropicApiKey: firebase.firestore.FieldValue.delete(),   // retire the old bring-your-own-key field
       nutritionCache: state.nutritionCache
     }, {merge:true});
   }catch(e){ console.error("Save failed:", e); }
@@ -1725,6 +1746,115 @@ async function signIn(email, password){
 }
 function signOutUser(){
   auth.signOut();
+}
+
+/* ---- First-launch tour ---- */
+var TOUR_STEPS = [
+  {art:"📲", orbit:["📸","🎬","🌐"], title:"Bring in any recipe",
+   text:"Paste a link from Instagram, TikTok, YouTube or any recipe site — Mise reads it and builds a clean recipe with a photo. On Android you can also use Share → Mise."},
+  {art:"📅", orbit:["✨","🍝","🥗"], title:"Plan your week",
+   text:"Tap “+ This week” on anything you're craving, or let ✨ Generate plan suggest seven dinners from your own recipes."},
+  {art:"🛒", orbit:["🧾","🥕","🥛"], title:"One smart shopping list",
+   text:"Ingredients from every meal combine into a single list, sorted by aisle. Mise skips what's already in your pantry — and you can scan a grocery receipt to stock it."},
+  {art:"👨‍🍳", orbit:["❤️","🌐","⭐"], title:"Cook it, share it",
+   text:"Cook Mode walks you through each step with the screen kept awake. Share your best recipes to Community, follow other cooks, and save theirs."}
+];
+function startTour(){ state.showSettings=false; state.showTour=true; state.tourStep=0; render(); }
+function tourNext(){ if (state.tourStep < TOUR_STEPS.length-1){ state.tourStep++; render(); } else finishTour(); }
+function tourPrev(){ if (state.tourStep>0){ state.tourStep--; render(); } }
+function finishTour(){
+  state.showTour=false; state.tourStep=0;
+  if (!state.onboarded){ state.onboarded=true; savePrivateState(); }
+  render();
+}
+function renderTour(){
+  var st = TOUR_STEPS[state.tourStep], last = state.tourStep===TOUR_STEPS.length-1;
+  var orbitPos = ["top:6px;left:8px;","top:14px;right:0;","bottom:2px;right:22px;"];
+  return '<div class="tour">'+
+    '<button class="tour-skip" onclick="finishTour()">'+(last?'':'Skip')+'</button>'+
+    '<div class="tour-body">'+
+    '<div class="tour-art">'+st.art+st.orbit.map(function(o,i){ return '<span class="orbit" style="'+orbitPos[i]+'">'+o+'</span>'; }).join("")+'</div>'+
+    '<h2>'+escapeHtml(st.title)+'</h2>'+
+    '<p>'+escapeHtml(st.text)+'</p>'+
+    '</div>'+
+    '<div class="tour-dots">'+TOUR_STEPS.map(function(_,i){ return '<span'+(i===state.tourStep?' class="on"':'')+'></span>'; }).join("")+'</div>'+
+    '<div class="tour-nav">'+
+    (state.tourStep>0 ? '<button class="btn secondary" onclick="tourPrev()">Back</button>' : '')+
+    '<button class="btn" onclick="tourNext()">'+(last?"Get cooking":"Next")+'</button>'+
+    '</div></div>';
+}
+
+/* ---- Receipt scanning -> pantry ---- */
+function openReceiptPicker(){ var el=document.getElementById("receipt-file"); if (el) el.click(); }
+function handleReceiptFile(input){
+  var file = input.files && input.files[0];
+  input.value = "";
+  if (!file || !file.type.startsWith("image/")) return;
+  state.receipt = {busy:true, error:"", store:"", items:null};
+  render();
+  var reader = new FileReader();
+  reader.onerror = function(){ state.receipt={busy:false,error:"Couldn't open that photo.",store:"",items:null}; render(); };
+  reader.onload = async function(e){
+    try{
+      var img = await downscaleDataUrl(e.target.result, 2000, 0.8);
+      var d = await apiPost("/api/receipt", {image:img});
+      if (!state.receipt) return;   // user closed the dialog while we were reading
+      state.receipt = {busy:false, error:"", store:d.store||"", items:(d.items||[]).map(function(i){ return {name:i.name, category:i.category, keep:true}; })};
+      if (!state.receipt.items.length) state.receipt.error = "I didn't find any groceries on that receipt. Try a flatter, brighter photo of the whole thing.";
+    }catch(err){
+      if (!state.receipt) return;
+      state.receipt = {busy:false, error:(err&&err.message)||"Couldn't read that receipt.", store:"", items:null};
+    }
+    render();
+  };
+  reader.readAsDataURL(file);
+}
+function closeReceipt(){ state.receipt=null; render(); }
+function receiptToggle(i){ if (state.receipt&&state.receipt.items[i]){ state.receipt.items[i].keep=!state.receipt.items[i].keep; render(); } }
+function receiptRename(i,v){ if (state.receipt&&state.receipt.items[i]) state.receipt.items[i].name=v.trim(); }
+function receiptConfirm(){
+  if (!state.receipt || !state.receipt.items) return;
+  var added = 0, now = new Date().toISOString();
+  state.receipt.items.forEach(function(it){
+    if (!it.keep || !it.name || isInPantry(it.name)) return;
+    state.pantry.push({id:"p"+Date.now()+Math.random().toString(36).slice(2,6), name:it.name, category:it.category||"Other", addedAt:now, source:"receipt"});
+    added++;
+  });
+  state.receipt = null;
+  state.showPantry = true;
+  savePrivateState();
+  render();
+}
+function renderReceiptModal(){
+  var r = state.receipt;
+  var body;
+  if (r.busy){
+    body = '<div style="text-align:center;padding:26px 8px;"><div style="font-size:42px;margin-bottom:10px;">🧾</div>'+
+      '<div style="font-size:15px;color:var(--text-soft);margin-bottom:12px;">Reading your receipt…</div>'+
+      '<div class="progress-bar"><div class="progress-bar-fill"></div></div></div>';
+  } else if (r.error || !r.items){
+    body = '<div style="padding:10px 0 4px;font-size:14px;color:var(--text-soft);line-height:1.6;">'+escapeHtml(r.error||"Something went wrong.")+'</div>'+
+      '<div class="modal-actions"><button class="btn" onclick="openReceiptPicker()">Try another photo</button><button class="btn secondary" onclick="closeReceipt()">Close</button></div>';
+  } else {
+    var keepN = r.items.filter(function(i){return i.keep;}).length;
+    body = '<div style="font-size:13px;color:var(--text-soft);margin-bottom:10px;">'+(r.store?escapeHtml(r.store)+' · ':'')+r.items.length+' grocery items found. Uncheck anything you don\'t want in your pantry.</div>';
+    r.items.forEach(function(it,i){
+      var have = isInPantry(it.name);
+      body += '<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);">'+
+        '<input type="checkbox" '+(it.keep?"checked":"")+' onchange="receiptToggle('+i+')" style="width:20px;height:20px;accent-color:var(--amber);flex-shrink:0;">'+
+        '<input type="text" value="'+escapeHtml(it.name)+'" onchange="receiptRename('+i+',this.value)" style="flex:1;min-width:0;">'+
+        '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;">'+(have?'already have':escapeHtml(it.category))+'</span>'+
+        '</div>';
+    });
+    body += '<div class="modal-actions" style="margin-top:14px;">'+
+      '<button class="btn" onclick="receiptConfirm()" '+(keepN?'':'disabled')+'>Add '+keepN+' to pantry</button>'+
+      '<button class="btn secondary" onclick="closeReceipt()">Cancel</button></div>';
+  }
+  return '<div class="overlay" onclick="if(event.target===this && !state.receipt.busy) closeReceipt()"><div class="modal">'+
+    '<button class="modal-close" onclick="closeReceipt()">×</button>'+
+    '<div class="modal-scroll"><div class="modal-head"><h2>Scan a receipt</h2>'+
+    '<div class="rcard-meta">Mise adds what you bought to your pantry</div></div>'+
+    '<div class="modal-body">'+body+'</div></div></div></div>';
 }
 
 /* ---- Account deletion (required by Google Play) ---- */
@@ -2263,51 +2393,28 @@ function openSettings(){
   render();
 }
 function closeSettings(){ state.showSettings=false; render(); }
-async function saveApiKey(){
-  var input=document.getElementById("api-key-input");
-  if (!input) return;
-  state.anthropicApiKey = input.value.trim();
-  await savePrivateState();
-  var s=document.getElementById("api-key-status");
-  if (s){ s.textContent="✓ Saved"; s.style.color="var(--green)"; setTimeout(function(){if(s)s.textContent="";},2500); }
-}
-async function testApiKey(){
-  var s=document.getElementById("api-key-status");
-  if (!state.anthropicApiKey){ if(s){s.textContent="Enter a key first";s.style.color="var(--red)";} return; }
-  if (s){ s.textContent="Testing…"; s.style.color="var(--text-soft)"; }
+/* ---- Server API (Mise AI + importer). Auth via the signed-in user's Firebase ID token. ---- */
+async function apiPost(path, body){
+  var user = auth.currentUser;
+  if (!user) throw new Error("Please sign in again.");
+  var token = await user.getIdToken();
+  var resp;
   try{
-    await callClaude("Say only: ok","ping");
-    if (s){ s.textContent="✓ Key works!"; s.style.color="var(--green)"; }
-    setTimeout(function(){if(s)s.textContent="";},3000);
-  }catch(e){
-    if (s){ s.textContent="✗ "+(e.message||"Invalid key"); s.style.color="var(--red)"; }
+    resp = await fetch(path, {
+      method:"POST",
+      headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},
+      body: JSON.stringify(body)
+    });
+  }catch(e){ throw new Error("You seem to be offline. Please check your connection and try again."); }
+  var data = await resp.json().catch(function(){ return {}; });
+  if (!resp.ok || data.ok===false){
+    throw new Error(data.message || ("Something went wrong ("+resp.status+"). Please try again."));
   }
+  return data;
 }
-
-/* ---- Claude API helper (browser-side, user's own key) ---- */
-async function callClaude(system, user, maxTokens){
-  if (!state.anthropicApiKey) throw new Error("No Anthropic API key — add one in Settings.");
-  var resp = await fetch("https://api.anthropic.com/v1/messages",{
-    method:"POST",
-    headers:{
-      "Content-Type":"application/json",
-      "x-api-key": state.anthropicApiKey,
-      "anthropic-version":"2023-06-01",
-      "anthropic-dangerous-allow-browser":"true"
-    },
-    body: JSON.stringify({
-      model:"claude-sonnet-4-6",
-      max_tokens: maxTokens||1000,
-      system: system,
-      messages:[{role:"user",content:user}]
-    })
-  });
-  if (!resp.ok){
-    var e=await resp.json().catch(function(){return{};});
-    throw new Error((e.error&&e.error.message)||("API error "+resp.status));
-  }
-  var data=await resp.json();
-  return data.content.map(function(b){return b.type==="text"?b.text:"";}).join("");
+async function callClaude(system, user, maxTokens, tier){
+  var d = await apiPost("/api/ai", {system:system, user:user, maxTokens:maxTokens||1000, tier:tier||"fast"});
+  return d.text || "";
 }
 
 /* ---- AI Meal Plan ---- */
@@ -2337,7 +2444,8 @@ async function generateMealPlan(){
       ".\n\nTheir saved recipes: "+myRecipes.join(", ")+
       ".\n\nReturn exactly 7 items in this JSON shape:\n"+
       '[{"day":"Monday","name":"Recipe Name","time":"30 min","isNew":false,"reason":"why it fits"}]\n'+
-      "Set isNew:false ONLY when name exactly matches their saved list. isNew:true for new ideas."
+      "Set isNew:false ONLY when name exactly matches their saved list. isNew:true for new ideas.",
+      1500, "smart"
     );
     var match=raw.match(/\[[\s\S]*\]/);
     if (!match) throw new Error("Unexpected response — try again");
@@ -2396,69 +2504,6 @@ async function estimateNutrition(recipeId){
   }catch(e){
     hideProg(); setStatus("Error: "+(e.message||"Try again"),"var(--red)");
     console.error(e);
-  }
-}
-
-/* ---- Social video / post import ---- */
-async function importFromSocial(){
-  var urlInput=document.getElementById("social-url-input");
-  var statusEl=document.getElementById("social-import-status");
-  var progEl=document.getElementById("social-import-progress");
-  var url=urlInput?urlInput.value.trim():"";
-  if (!url){if(statusEl)statusEl.textContent="Paste a URL first";return;}
-  function setStatus(msg){if(statusEl)statusEl.textContent=msg;}
-  function showProg(){if(progEl)progEl.style.display="block";}
-  function hideProg(){if(progEl)progEl.style.display="none";}
-  showProg(); setStatus("Fetching post…");
-  var pageText="";
-  // TikTok oEmbed (no CORS issues)
-  if (url.includes("tiktok.com")){
-    try{
-      var oe=await fetch("https://www.tiktok.com/oembed?url="+encodeURIComponent(url));
-      if (oe.ok){ var d=await oe.json(); pageText=(d.title||"")+" "+(d.author_name||""); }
-    }catch(e){}
-  }
-  // CORS proxy fallback for page content
-  if (!pageText){
-    var proxies=["https://corsproxy.io/?url=","https://api.allorigins.win/raw?url="];
-    for (var i=0;i<proxies.length&&!pageText;i++){
-      try{
-        var r=await fetch(proxies[i]+encodeURIComponent(url));
-        if (r.ok){
-          var t=await r.text();
-          var desc=(t.match(/<meta[^>]+(?:og:description|description)[^>]+content="([^"]{10,})"/i)||[])[1]||"";
-          var title=(t.match(/<title[^>]*>([^<]+)<\/title>/i)||[])[1]||"";
-          pageText=(title+" "+desc).trim();
-        }
-      }catch(e){}
-    }
-  }
-  if (!pageText){
-    hideProg();
-    setStatus("Couldn't fetch that page — try pasting the caption in the text box below instead.");
-    return;
-  }
-  setStatus("Extracting recipe with AI…");
-  try{
-    var raw=await callClaude(
-      "You are a recipe extractor. Extract a recipe from social media text. Respond ONLY with valid JSON.",
-      "Extract a recipe from this social media post:\n\n"+pageText+"\n\n"+
-      'Return ONLY this JSON (or null if no recipe found):\n'+
-      '{"name":"Recipe Name","time":"30 min","servings":4,"tags":["Quick"],"kidFriendly":false,"kidNote":"",'+
-      '"ingredients":[{"amount":2,"unit":"cups","name":"flour","category":"Pantry & Dry Goods"}],'+
-      '"steps":["Step 1.","Step 2."]}\n'+
-      "Valid categories: Produce, Meat & Seafood, Dairy & Eggs, Bakery & Grains, Pantry & Dry Goods, Condiments & Sauces, Spices & Seasonings, Spirits & Mixers, Frozen, Other."
-    );
-    if (raw.trim()==="null"||raw.includes('"null"')) throw new Error("No recipe found in that post");
-    var match=raw.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error("No recipe found in that post");
-    var draft=JSON.parse(match[0]);
-    hideProg(); setStatus("");
-    state.importDraft=draft;
-    state.formState={mode:"add",recipeId:null,ingRows:draft.ingredients.length||4};
-    state.importMode=false; render();
-  }catch(e){
-    hideProg(); setStatus("Error: "+(e.message||"Try again"));
   }
 }
 
@@ -2598,13 +2643,19 @@ function checkShareTarget(){
   var params = new URLSearchParams(window.location.search);
   var sharedUrl  = params.get("shared_url")  || "";
   var sharedText = params.get("shared_text") || "";
+  var sharedTitle = params.get("shared_title") || "";
 
-  var url = (sharedUrl.startsWith("http") ? sharedUrl : null) ||
-            (sharedText.startsWith("http") ? sharedText : null);
+  // Apps put the link in different places (and often wrap it in a sentence), so look everywhere.
+  var urlRe = /https?:\/\/[^\s<>"']+/i;
+  var found = (sharedUrl.match(urlRe)||[])[0] || (sharedText.match(urlRe)||[])[0] || (sharedTitle.match(urlRe)||[])[0] || "";
+  var textOnly = sharedText.replace(urlRe,"").trim();
 
-  if (url){
-    state.pendingSharedImportUrl = url;
-    // Remove share params from the URL bar so refreshing doesn't re-trigger
+  if (found){
+    state.pendingSharedImportUrl = found;
+  } else if (textOnly.length > 60){
+    state.pendingSharedImportText = textOnly;   // a caption shared without a link
+  }
+  if (found || textOnly.length > 60){
     try{
       var clean = new URL(window.location.href);
       ["shared_url","shared_text","shared_title"].forEach(function(k){ clean.searchParams.delete(k); });
@@ -2613,23 +2664,22 @@ function checkShareTarget(){
   }
 }
 
-// Called after the user is confirmed signed in.
-// Routes the pending shared URL to the right importer automatically.
+// Called after the user is confirmed signed in. Opens the importer and runs it.
 function handlePendingSharedImport(){
   var url = state.pendingSharedImportUrl;
-  if (!url) return;
+  var txt = state.pendingSharedImportText;
+  if (!url && !txt) return;
   state.pendingSharedImportUrl = null;
-
-  var isSocial = /tiktok\.com|instagram\.com\/(reel|p)\/|youtube\.com\/shorts|youtu\.be/.test(url);
+  state.pendingSharedImportText = null;
   state.importMode = true;
   render();
   setTimeout(function(){
-    if (isSocial){
-      var inp = document.getElementById("social-url-input");
-      if (inp){ inp.value = url; importFromSocial(); }
-    } else {
+    if (url){
       var inp = document.getElementById("import-url-input");
       if (inp){ inp.value = url; handleUrlImport(); }
+    } else {
+      var ta = document.getElementById("import-text-input");
+      if (ta){ ta.value = txt; handleTextImport(); }
     }
   }, 80);
 }
@@ -2867,52 +2917,6 @@ function parseIsoTime(iso){
   return parts.join(" ");
 }
 
-function findRecipeJsonLdNode(node){
-  if (!node) return null;
-  if (Array.isArray(node)){
-    for (var i=0;i<node.length;i++){
-      var found = findRecipeJsonLdNode(node[i]);
-      if (found) return found;
-    }
-    return null;
-  }
-  if (typeof node !== "object") return null;
-  var type = node["@type"];
-  if (type==="Recipe" || (Array.isArray(type) && type.indexOf("Recipe")>-1)) return node;
-  if (node["@graph"]) return findRecipeJsonLdNode(node["@graph"]);
-  return null;
-}
-function extractRecipeJsonLd(html){
-  var doc = new DOMParser().parseFromString(html, "text/html");
-  var scripts = doc.querySelectorAll('script[type="application/ld+json"]');
-  for (var i=0;i<scripts.length;i++){
-    try{
-      var parsed = JSON.parse(scripts[i].textContent);
-      var found = findRecipeJsonLdNode(parsed);
-      if (found) return found;
-    }catch(e){ /* malformed JSON on this site, skip it */ }
-  }
-  return null;
-}
-
-async function fetchPageHtml(url){
-  var proxies = [
-    "https://api.allorigins.win/raw?url=" + encodeURIComponent(url),
-    "https://corsproxy.io/?url=" + encodeURIComponent(url)
-  ];
-  var lastErr = null;
-  for (var i=0;i<proxies.length;i++){
-    try{
-      var res = await fetch(proxies[i]);
-      if (res.ok){
-        var text = await res.text();
-        if (text && text.length>200) return text;
-      }
-    }catch(e){ lastErr = e; }
-  }
-  throw new Error("Couldn't reach that page right now.");
-}
-
 function recipeNodeToDraft(node){
   var name = (typeof node.name==="string" && node.name) ? node.name : "Imported Recipe";
   var ingredientsRaw = node.recipeIngredient || node.ingredients || [];
@@ -2932,22 +2936,62 @@ function recipeNodeToDraft(node){
   return {name:name, ingredients:ingredients, steps:steps, servings:servings, time:time, tags:tags, kidFriendly:false, image:image};
 }
 
+function startImportDraft(draft, image){
+  draft.image = image || draft.image || "";
+  state.importDraft = draft;
+  state.importMode = false;
+  state.formState = {mode:"add", recipeId:null, ingRows: (draft.ingredients||[]).length || 4};
+  render();
+}
 async function handleUrlImport(){
   var urlInput = document.getElementById("import-url-input");
   var statusEl = document.getElementById("import-status");
+  var progEl = document.getElementById("import-progress");
   var url = urlInput ? urlInput.value.trim() : "";
-  if (!url){ if (statusEl) statusEl.textContent = "Paste a recipe URL first."; return; }
-  if (statusEl) statusEl.textContent = "Fetching the page…";
+  if (!url){ if (statusEl) statusEl.textContent = "Paste a link first."; return; }
+  if (state.importBusy) return;
+  state.importBusy = true;
+  if (progEl) progEl.style.display = "block";
+  if (statusEl) statusEl.textContent = /instagram|tiktok|youtu/i.test(url) ? "Reading the post…" : "Reading the page…";
   try{
-    var html = await fetchPageHtml(url);
-    var node = extractRecipeJsonLd(html);
-    if (!node) throw new Error("Couldn't find recipe data on that page — try pasting the ingredients and steps below instead.");
-    state.importDraft = recipeNodeToDraft(node);
-    state.importMode = false;
-    state.formState = {mode:"add", recipeId:null, ingRows: state.importDraft.ingredients.length || 4};
-    render();
+    var d = await apiPost("/api/import", {url:url});
+    var draft;
+    if (d.source==="jsonld"){
+      draft = recipeNodeToDraft(d.node);
+      if (!draft.ingredients.length && !draft.steps.length) throw new Error("Couldn't read a recipe on that page.");
+    } else {
+      draft = d.draft;
+    }
+    if (statusEl && (d.image || draft.image)) statusEl.textContent = "Saving the photo…";
+    var rawImg = d.image || draft.image || "";
+    var savedImg = await localizeImage(rawImg);
+    if (!savedImg && d.source==="jsonld") savedImg = rawImg;   // recipe-site photos are stable; social thumbnails expire
+    state.importBusy = false;
+    startImportDraft(draft, savedImg);
   }catch(e){
-    if (statusEl) statusEl.textContent = (e && e.message) ? e.message : "Couldn't import that page automatically — try pasting it below instead.";
+    state.importBusy = false;
+    if (progEl) progEl.style.display = "none";
+    if (statusEl) statusEl.textContent = (e && e.message) ? e.message : "Couldn't import that link — try pasting the text below instead.";
+  }
+}
+async function handleTextImport(){
+  var ta = document.getElementById("import-text-input");
+  var statusEl = document.getElementById("import-text-status");
+  var progEl = document.getElementById("import-text-progress");
+  var text = ta ? ta.value.trim() : "";
+  if (text.length < 30){ if (statusEl) statusEl.textContent = "Paste the caption or recipe text first."; return; }
+  if (state.importBusy) return;
+  state.importBusy = true;
+  if (progEl) progEl.style.display = "block";
+  if (statusEl) statusEl.textContent = "Reading the recipe…";
+  try{
+    var d = await apiPost("/api/import", {text:text});
+    state.importBusy = false;
+    startImportDraft(d.draft, "");
+  }catch(e){
+    state.importBusy = false;
+    if (progEl) progEl.style.display = "none";
+    if (statusEl) statusEl.textContent = (e && e.message) ? e.message : "Couldn't read that text.";
   }
 }
 
@@ -3108,6 +3152,83 @@ function openEditForm(id){
 }
 
 /* ---- Photo upload (resize in-browser to keep Firestore docs small) ---- */
+/* ---- Recipe images: real photo when we have one, otherwise a generated cover ---- */
+var COVER_PALETTE = [
+  ["#2a2438","#4a3a5e"],["#1f3a33","#2f5e4c"],["#3d2a22","#6b4630"],["#22303f","#385a78"],
+  ["#3a2230","#6b3a52"],["#33321f","#5e5a2f"],["#1f2f3a","#2f5e5e"],["#38261f","#7a4a2a"]
+];
+var COVER_EMOJI = [
+  [/margarita|daiquiri|mojito|colada|tiki|mai tai|punch|rum/,"🍹"],
+  [/martini|manhattan|negroni|cosmopolitan|gimlet|spritz/,"🍸"],
+  [/old fashioned|whiskey|whisky|bourbon|scotch|sazerac|julep/,"🥃"],
+  [/beer|ale\b|lager|shandy/,"🍺"],[/wine|sangria/,"🍷"],
+  [/spaghetti|pasta|linguine|fettuccine|penne|lasagna|rigatoni|carbonara|mac(aroni)? (and|&) cheese|noodle|ramen|pad thai/,"🍝"],
+  [/pizza|calzone|flatbread/,"🍕"],[/burger|sandwich|sub\b|panini|melt|sloppy/,"🍔"],
+  [/taco|burrito|quesadilla|enchilada|fajita|nacho/,"🌮"],
+  [/soup|stew|chili|chowder|bisque|broth|gumbo|pozole|consomm/,"🍲"],
+  [/curry|tikka|masala|korma|dal\b/,"🍛"],
+  [/salad|slaw/,"🥗"],
+  [/shrimp|prawn|scampi/,"🍤"],[/salmon|cod|fish|tuna|tilapia|halibut|crab|lobster|seafood/,"🐟"],
+  [/steak|beef|brisket|ribeye|sirloin|short rib|pot roast|meatball|meatloaf/,"🥩"],
+  [/chicken|wing|drumstick|turkey/,"🍗"],[/pork|ham\b|bacon|sausage|ribs?\b|carnitas/,"🥓"],
+  [/pie\b|cake|brownie|cookie|cupcake|cobbler|crumble|pudding|cheesecake|tart|dessert|ice cream|key lime/,"🍰"],
+  [/pancake|waffle|french toast|crepe/,"🥞"],[/egg|omelet|frittata|quiche|shakshuka|benedict/,"🍳"],
+  [/rice|risotto|paella|fried rice|pilaf|bowl/,"🍚"],[/potato|fries|gratin|hash/,"🥔"],
+  [/bread|biscuit|roll|focaccia|toast|bagel|muffin/,"🍞"],[/cheese|fondue/,"🧀"],
+  [/sushi|poke|teriyaki|miso/,"🍣"],[/dumpling|gyoza|potsticker|bao/,"🥟"],
+  [/vegetable|veggie|broccoli|kale|stir.?fry|zucchini|squash|cauliflower/,"🥦"]
+];
+function hashStr(s){ var h=0; for (var i=0;i<s.length;i++){ h=((h<<5)-h+s.charCodeAt(i))|0; } return Math.abs(h); }
+function recipeCover(r){
+  var name = (r.name||"").toLowerCase();
+  var tags = (r.tags||[]).join(" ").toLowerCase();
+  var ings = (r.ingredients||[]).slice(0,8).map(function(i){return i.name||"";}).join(" ").toLowerCase();
+  var isDrink = /cocktail|tiki/.test(tags) ||
+    ((r.ingredients||[]).some(function(i){return i.category==="Spirits & Mixers";}) && (r.steps||[]).length<=4);
+  var emoji = isDrink ? "🍹" : "🍽️";
+  var hay = name+" "+tags;
+  var hit = COVER_EMOJI.filter(function(p){ return p[0].test(hay); })[0] || (!isDrink ? COVER_EMOJI.filter(function(p){ return p[0].test(ings); })[0] : null);
+  if (hit) emoji = hit[1];
+  var h = hashStr(r.id ? String(r.id)+name : name);
+  var p = COVER_PALETTE[h % COVER_PALETTE.length];
+  var cx = 60 + (h % 280), cy = 20 + (h>>3) % 160;
+  var svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 200" preserveAspectRatio="xMidYMid slice">'+
+    '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="'+p[0]+'"/><stop offset="1" stop-color="'+p[1]+'"/></linearGradient></defs>'+
+    '<rect width="400" height="200" fill="url(#g)"/>'+
+    '<circle cx="'+cx+'" cy="'+cy+'" r="120" fill="#ffffff" fill-opacity="0.05"/>'+
+    '<circle cx="'+(400-cx)+'" cy="'+(200-cy)+'" r="70" fill="#000000" fill-opacity="0.10"/>'+
+    '<text x="200" y="128" font-size="84" text-anchor="middle">'+emoji+'</text></svg>';
+  return "data:image/svg+xml;charset=utf-8,"+encodeURIComponent(svg);
+}
+function recipeImg(r){ return (r && r.image) ? r.image : recipeCover(r||{}); }
+
+// Save our own copy of a remote photo (so social-media thumbnails don't expire later).
+function downscaleDataUrl(dataUrl, max, q){
+  return new Promise(function(res, rej){
+    var img = new Image();
+    img.onload = function(){
+      var ratio = Math.min(max/img.naturalWidth, max/img.naturalHeight, 1);
+      var c = document.createElement("canvas");
+      c.width = Math.round(img.naturalWidth*ratio); c.height = Math.round(img.naturalHeight*ratio);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      res(c.toDataURL("image/jpeg", q));
+    };
+    img.onerror = function(){ rej(new Error("image")); };
+    img.src = dataUrl;
+  });
+}
+async function localizeImage(url){
+  if (!url) return "";
+  if (url.indexOf("data:")===0) return url;
+  try{
+    var d = await Promise.race([
+      apiPost("/api/img", {url:url}),
+      new Promise(function(_, rej){ setTimeout(function(){ rej(new Error("timeout")); }, 9000); })
+    ]);
+    return await downscaleDataUrl(d.dataUrl, 800, 0.8);
+  }catch(e){ return ""; }
+}
+
 function handlePhotoSelect(input){
   var file = input.files&&input.files[0];
   if (!file||!file.type.startsWith("image/")) return;
@@ -3374,6 +3495,8 @@ function render(){
   html += '</div>';
   if (state.deleteAcct){
     html += renderDeleteAccountModal();
+  } else if (state.receipt){
+    html += renderReceiptModal();
   } else if (state.formState){
     html += renderRecipeFormModal();
   } else if (state.showSettings){
@@ -3387,6 +3510,7 @@ function render(){
   } else if (state.modalRecipe){
     html += renderRecipeModal(findRecipe(state.modalRecipe));
   }
+  if (state.showTour) html += renderTour();
   app.innerHTML = html;
   attachFormHandler();
 }
@@ -3451,6 +3575,7 @@ function renderCommunityTab(){
     var authorName = mine ? "You" : (r.ownerName || "Someone");
     var following = !mine && isFollowing(r.ownerId);
     html += '<div class="rcard" onclick="openRecipe(\''+r.id+'\')">'+
+      '<img class="rcard-img" src="'+escapeHtml(recipeImg(r))+'" alt="" loading="lazy">'+
       '<div class="rcard-top"><div class="rcard-top-inner">'+
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">'+
       '<h3 style="flex:1;">'+escapeHtml(r.name)+'</h3>'+
@@ -3478,31 +3603,16 @@ function renderCommunityTab(){
 }
 
 function renderSettingsModal(){
-  var hasKey = !!state.anthropicApiKey;
-  var maskedKey = hasKey ? "sk-ant-…"+state.anthropicApiKey.slice(-6) : "";
   return '<div class="overlay" onclick="if(event.target===this) closeSettings()"><div class="modal">'+
     '<button class="modal-close" onclick="closeSettings()">×</button>'+
     '<div class="modal-scroll">'+
     '<div class="modal-head"><h2>Settings</h2></div>'+
     '<div class="modal-body">'+
 
-    '<div class="field">'+
-    '<label>Anthropic API Key <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;opacity:.7;">— enables AI meal plans, nutrition estimates, and social import</span></label>'+
-    '<input type="password" id="api-key-input" placeholder="sk-ant-api03-…" value="'+escapeHtml(state.anthropicApiKey)+'" autocomplete="off" style="font-family:var(--font-mono,monospace);font-size:13px;">'+
-    (hasKey?'<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Currently saved: '+escapeHtml(maskedKey)+'</div>':'')+
-    '<div style="display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap;">'+
-    '<button class="btn" onclick="saveApiKey()">Save key</button>'+
-    '<button class="btn secondary" onclick="testApiKey()">Test connection</button>'+
-    '<span id="api-key-status" style="font-size:13px;"></span>'+
-    '</div>'+
-    '<div style="font-size:12px;color:var(--text-muted);margin-top:10px;line-height:1.6;">'+
-    'Get a free key at <a href="https://console.anthropic.com/" target="_blank" style="color:var(--amber);">console.anthropic.com</a>. '+
-    'Your key is stored in your private Firestore account and never shared. '+
-    'New accounts include $5 of free credit (~1,600 meal plans).'+
-    '</div>'+
-    '</div>'+
+    '<div style="font-size:13.5px;line-height:1.6;color:var(--text-soft);">✨ AI features (meal plans, nutrition, smart import, receipt scanning) are built in — nothing to set up.</div>'+
 
     '<div style="border-top:1px solid var(--border-mid);margin-top:18px;padding-top:14px;font-size:13px;line-height:1.9;">'+
+    '<a href="#" onclick="startTour();return false;" style="color:var(--amber);">Replay the tour</a> &middot; '+
     '<a href="/privacy.html" target="_blank" rel="noopener" style="color:var(--amber);">Privacy policy</a> &middot; '+
     '<a href="/delete-account.html" target="_blank" rel="noopener" style="color:var(--amber);">Account &amp; data deletion</a>'+
     '</div>'+
@@ -3516,18 +3626,6 @@ function renderSettingsModal(){
 
 function renderMealPlanModal(){
   var p = state.mealPlanPrefs;
-  var hasKey = !!state.anthropicApiKey;
-
-  if (!hasKey){
-    return '<div class="overlay" onclick="if(event.target===this) closeMealPlanModal()"><div class="modal">'+
-      '<button class="modal-close" onclick="closeMealPlanModal()">×</button>'+
-      '<div class="modal-scroll"><div class="modal-head"><h2>Generate Meal Plan</h2></div>'+
-      '<div class="modal-body" style="text-align:center;padding:30px 20px;">'+
-      '<div style="font-size:32px;margin-bottom:12px;">✨</div>'+
-      '<p style="margin-bottom:16px;color:var(--text-soft);">AI meal planning needs an Anthropic API key. It\'s free to set up and takes about 2 minutes.</p>'+
-      '<button class="btn" onclick="closeMealPlanModal();openSettings();">Add API Key in Settings →</button>'+
-      '</div></div></div></div>';
-  }
 
   if (!state.mealPlanDraft){
     // Preferences form
@@ -3768,6 +3866,7 @@ function renderCocktailsTab(){
     var shareDoc = shareDocsByStarter[r.id];
     var isPublicSomehow = !!r.isPublic || !!(shareDoc && shareDoc.isPublic);
     html += '<div class="rcard" onclick="openRecipe(\''+r.id+'\')">'+
+      '<img class="rcard-img" src="'+escapeHtml(recipeImg(r))+'" alt="" loading="lazy">'+
       '<div class="rcard-top"><div class="rcard-top-inner">'+
       '<h3>'+escapeHtml(r.name)+'</h3>'+
       '<div class="rcard-meta">'+escapeHtml(r.time||"")+' &middot; serves '+(r.servings||1)+'</div></div></div>'+
@@ -3829,9 +3928,8 @@ function renderRecipeListArea(){
     var shareDocId = state.starterShares[r.id];
     var shareDoc = shareDocId ? state.myRecipes.filter(function(x){return x.id===shareDocId;})[0] : null;
     var isPublicSomehow = !!r.isPublic || !!(shareDoc && shareDoc.isPublic);
-    var img = r.image || "";
     html += '<div class="rcard" onclick="openRecipe(\''+r.id+'\')">'+
-      (img ? '<img class="rcard-img" src="'+escapeHtml(img)+'" alt="" loading="lazy">' : '')+
+      '<img class="rcard-img" src="'+escapeHtml(recipeImg(r))+'" alt="" loading="lazy">'+
       '<div class="rcard-top"><div class="rcard-top-inner"><h3>'+escapeHtml(r.name)+'</h3>'+
       '<div class="rcard-meta">'+escapeHtml(r.time||"")+' &middot; serves '+(r.servings||4)+'</div></div></div>'+
       '<div class="tagrow">'+
@@ -3860,7 +3958,7 @@ function renderRecipeModal(r){
   var html = '<div class="overlay" onclick="if(event.target===this) closeModal()"><div class="modal">'+
     '<button class="modal-close" onclick="closeModal()">×</button>'+
     '<div class="modal-scroll">'+
-    (r.image ? '<img src="'+escapeHtml(r.image)+'" alt="" style="width:100%;height:200px;object-fit:cover;display:block;">' : '')+
+    '<img src="'+escapeHtml(recipeImg(r))+'" alt="" style="width:100%;height:200px;object-fit:cover;display:block;">'+
     '<div class="modal-head"><h2>'+escapeHtml(r.name)+
     (owned && r.isPublic ? ' <span style="font-size:14px;font-family:\'Libre Franklin\',sans-serif;font-weight:700;color:var(--sage-dark);">🌐 Public</span>' : '')+
     (isStarter && starterIsPublic ? ' <span style="font-size:14px;font-family:\'Libre Franklin\',sans-serif;font-weight:700;color:var(--sage-dark);">🌐 Public</span>' : '')+
@@ -3928,7 +4026,6 @@ function renderRecipeModal(r){
 
   // Nutrition section
   var nutrition = state.nutritionCache[r.id] || r.nutrition || null;
-  var hasKey = !!state.anthropicApiKey;
   html += '<div style="margin-top:18px;border-top:1px solid var(--border-mid);padding-top:14px;">'+
     '<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--amber-lo);margin-bottom:10px;">Nutrition per serving</div>';
   if (nutrition){
@@ -3944,12 +4041,10 @@ function renderRecipeModal(r){
       '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;">AI estimate · <button onclick="estimateNutrition(\''+r.id+'\')" style="background:none;border:none;color:var(--amber-lo);cursor:pointer;font-size:11px;padding:0;">Recalculate</button></div>'+
       '<div class="progress-bar" id="nutrition-progress" style="display:none;margin-top:6px;"><div class="progress-bar-fill"></div></div>'+
       '<div id="nutrition-status" style="font-size:12px;min-height:14px;"></div>';
-  } else if (hasKey){
+  } else {
     html += '<button class="btn secondary" onclick="estimateNutrition(\''+r.id+'\')" style="font-size:12px;padding:7px 12px;min-height:36px;">✨ Estimate with AI</button>'+
       '<div class="progress-bar" id="nutrition-progress" style="display:none;margin-top:8px;"><div class="progress-bar-fill"></div></div>'+
       '<div id="nutrition-status" style="font-size:12px;margin-top:6px;min-height:14px;"></div>';
-  } else {
-    html += '<div style="font-size:12px;color:var(--text-muted);">Add an <a href="#" onclick="closeModal();openSettings();return false;" style="color:var(--amber);">Anthropic API key in Settings</a> to estimate calories and macros.</div>';
   }
   html += '</div>';
 
@@ -4013,7 +4108,7 @@ function renderShoppingTab(){
   var hasRecipes = keys.length>0;
 
   if (!hasRecipes && !hasStaples && !hasOneTime){
-    return '<div class="empty"><span class="big">Your list is empty</span>Add meals to "This Week," add a staple, or add a one-off item below.</div>';
+    return '<div class="empty"><span class="big">Your list is empty</span>Add meals to "This Week," add a staple, or scan a grocery receipt to stock your pantry.<div style="margin-top:14px;"><button class="btn" onclick="openReceiptPicker()">🧾 Scan a receipt</button></div></div>';
   }
 
   var byCat = {};
@@ -4038,6 +4133,7 @@ function renderShoppingTab(){
   html += '<div class="quick-add-row">'+
     '<input type="text" id="one-time-input" placeholder="Add item to today\'s list…" onkeydown="submitOneTimeItem(event)">'+
     '<button class="btn" onclick="submitOneTimeItem(null)" style="padding:9px 12px;font-size:13px;">Add</button>'+
+    '<button class="btn secondary" onclick="openReceiptPicker()" style="padding:9px 12px;font-size:13px;" title="Scan a grocery receipt to stock your pantry">🧾</button>'+
     '</div>';
 
   // One-time items
@@ -4227,41 +4323,32 @@ function renderRecipeFormModal(){
 }
 
 function renderImportModal(){
-  var hasKey = !!state.anthropicApiKey;
   var html = '<div class="overlay" onclick="if(event.target===this) closeImportModal()"><div class="modal">'+
     '<button class="modal-close" onclick="closeImportModal()">×</button>'+
     '<div class="modal-scroll">'+
     '<div class="modal-head"><h2>Import a recipe</h2>'+
-    '<div class="rcard-meta">Pull in from a recipe site, social post, or paste it manually</div></div>'+
+    '<div class="rcard-meta">From any recipe site, Instagram, TikTok, YouTube — or paste it</div></div>'+
     '<div class="modal-body">'+
 
-    // --- Recipe URL section ---
-    '<div class="field"><label>Recipe URL <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;opacity:.7;">— any food blog or recipe site</span></label>'+
+    '<div class="field"><label>Paste a link</label>'+
     '<div style="display:flex;gap:8px;">'+
-    '<input type="text" id="import-url-input" placeholder="https://example.com/some-recipe" style="flex:1;" onkeydown="if(event.key===\'Enter\') handleUrlImport()">'+
-    '<button type="button" class="btn" onclick="handleUrlImport()">Fetch</button>'+
+    '<input type="text" id="import-url-input" placeholder="https://…" inputmode="url" autocapitalize="off" style="flex:1;" onkeydown="if(event.key===\'Enter\') handleUrlImport()">'+
+    '<button type="button" class="btn" onclick="handleUrlImport()">Import</button>'+
     '</div>'+
+    '<div class="progress-bar" id="import-progress" style="display:none;margin-top:8px;"><div class="progress-bar-fill"></div></div>'+
     '<div id="import-status" style="font-size:13px;color:var(--text-soft);margin-top:6px;min-height:16px;"></div>'+
+    '<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Tip: in Instagram or TikTok, tap Share → Copy link, then paste it here. If a post keeps its recipe in the caption, we read it for you.</div>'+
     '</div>'+
 
-    // --- Social / Video section ---
     '<div class="field" style="border-top:1px solid var(--border-mid);padding-top:16px;margin-top:4px;">'+
-    '<label>Social / Video URL ✨ <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;opacity:.7;">— TikTok, Instagram, YouTube description</span></label>'+
-    (hasKey
-      ? '<div style="display:flex;gap:8px;">'+
-        '<input type="text" id="social-url-input" placeholder="https://www.tiktok.com/@user/video/…" style="flex:1;" onkeydown="if(event.key===\'Enter\') importFromSocial()">'+
-        '<button type="button" class="btn" onclick="importFromSocial()">Extract</button>'+
-        '</div>'+
-        '<div class="progress-bar" id="social-import-progress" style="display:none;margin-top:8px;"><div class="progress-bar-fill"></div></div>'+
-        '<div id="social-import-status" style="font-size:13px;color:var(--text-soft);margin-top:6px;min-height:16px;"></div>'+
-        '<div style="font-size:12px;color:var(--text-muted);margin-top:6px;">Paste a TikTok or Instagram post URL. If it can\'t extract automatically, paste the caption text in the "paste it in" section below.</div>'
-      : '<div style="font-size:13px;color:var(--text-soft);padding:10px;background:var(--bg-raised);border-radius:var(--radius);">'+
-        'Requires an Anthropic API key. <a href="#" onclick="closeImportModal();openSettings();return false;" style="color:var(--amber);">Add one in Settings →</a></div>'
-    )+
+    '<label>Or paste a caption / recipe text ✨</label>'+
+    '<textarea id="import-text-input" placeholder="Paste the caption, comments, or any text that has the recipe…" style="min-height:80px;"></textarea>'+
+    '<div style="margin-top:8px;"><button type="button" class="btn secondary" onclick="handleTextImport()">Read it</button></div>'+
+    '<div class="progress-bar" id="import-text-progress" style="display:none;margin-top:8px;"><div class="progress-bar-fill"></div></div>'+
+    '<div id="import-text-status" style="font-size:13px;color:var(--text-soft);margin-top:6px;min-height:16px;"></div>'+
     '</div>'+
 
-    // --- Manual paste section ---
-    '<div style="text-align:center;margin:20px 0 14px;color:var(--text-muted);font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;">— or paste it in manually —</div>'+
+    '<div style="text-align:center;margin:20px 0 14px;color:var(--text-muted);font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;">— or enter it manually —</div>'+
     '<div class="field"><label>Recipe name</label><input type="text" id="import-paste-name" placeholder="e.g. Grandma\'s Lasagna"></div>'+
     '<div class="field"><label>Ingredients (one per line)</label><textarea id="import-paste-ingredients" placeholder="2 cups flour\n1 lb ground beef\n1 onion, diced" style="min-height:80px;"></textarea></div>'+
     '<div class="field"><label>Steps (one per line)</label><textarea id="import-paste-steps" placeholder="Preheat the oven…\nBrown the beef…" style="min-height:80px;"></textarea></div>'+
