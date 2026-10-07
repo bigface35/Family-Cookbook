@@ -768,7 +768,7 @@ var STARTER_RECIPES = [
   {
     id:"steak-bourbon-diane", name:"Steak with Bourbon Diane Sauce",
     tags:["American"], kidFriendly:false,
-    kidNote:"Skip the bourbon sauce for the toddler's plate and serve their portion of steak plain alongside buttered noodles or rice.",
+    kidNote:"Skip the bourbon sauce for a kid's plate and serve their portion of steak plain alongside buttered noodles or rice.",
     time:"40 min", servings:4,
     ingredients:[
       {amount:4,unit:"whole",name:"steaks (filet, sirloin, or ribeye, 6-8 oz each)",category:"Meat & Seafood"},
@@ -796,7 +796,7 @@ var STARTER_RECIPES = [
   {
     id:"quesabirria-tacos", name:"Quesabirria Tacos",
     tags:["Mexican","Weekend Project"], kidFriendly:false,
-    kidNote:"Make the toddler a plain quesadilla with the same melty cheese, no consommé needed.",
+    kidNote:"Make the kids a plain quesadilla with the same melty cheese, no consommé needed.",
     time:"3 hr 30 min", servings:6,
     ingredients:[
       {amount:3,unit:"lb",name:"chuck roast or bone-in short ribs, cut into chunks",category:"Meat & Seafood"},
@@ -1138,7 +1138,7 @@ var STARTER_RECIPES = [
   {
     id:"zuppa-toscana", name:"Zuppa Toscana",
     tags:["Italian","Soup"], kidFriendly:true,
-    kidNote:"Scoop out a kale-free portion of broth, sausage, and potato for the toddler before stirring in the kale.",
+    kidNote:"Scoop out a kale-free portion of broth, sausage, and potato for the kids before stirring in the kale.",
     time:"40 min", servings:6,
     ingredients:[
       {amount:1,unit:"lb",name:"Italian sausage, casings removed",category:"Meat & Seafood"},
@@ -1162,7 +1162,7 @@ var STARTER_RECIPES = [
   {
     id:"general-tsos-chicken", name:"General Tso's Chicken",
     tags:["Asian"], kidFriendly:true,
-    kidNote:"Leave out the red pepper flakes for a mild version, or fry a few plain chicken pieces for the toddler before adding sauce.",
+    kidNote:"Leave out the red pepper flakes for a mild version, or fry a few plain chicken pieces for the kids before adding sauce.",
     time:"40 min", servings:4,
     ingredients:[
       {amount:1.5,unit:"lb",name:"chicken thighs or breast, cut into chunks",category:"Meat & Seafood"},
@@ -1214,7 +1214,7 @@ var STARTER_RECIPES = [
   {
     id:"chicken-tikka-masala", name:"Chicken Tikka Masala",
     tags:["Indian"], kidFriendly:true,
-    kidNote:"This version is mild, but you can hold back extra spice from the toddler's portion before simmering further.",
+    kidNote:"This version is mild, but you can hold back extra spice from the kids' portions before simmering further.",
     time:"50 min (plus marinating)", servings:4,
     ingredients:[
       {amount:1.5,unit:"lb",name:"boneless chicken thighs, cubed",category:"Meat & Seafood"},
@@ -1245,7 +1245,7 @@ var STARTER_RECIPES = [
   {
     id:"chicken-rogan-josh", name:"Chicken Rogan Josh",
     tags:["Indian"], kidFriendly:false,
-    kidNote:"This one runs spicier. Set aside a portion of the seared chicken before adding the chili-heavy sauce, and serve it with rice or plain yogurt for the toddler.",
+    kidNote:"This one runs spicier. Set aside a portion of the seared chicken before adding the chili-heavy sauce, and serve it with rice or plain yogurt for the kids.",
     time:"55 min", servings:4,
     ingredients:[
       {amount:1.5,unit:"lb",name:"boneless chicken thighs, cubed",category:"Meat & Seafood"},
@@ -1609,6 +1609,7 @@ var auth = firebase.auth();
 var db = firebase.firestore();
 try{ db.enablePersistence({synchronizeTabs:true}); }catch(e){}
 
+var NEW_USER_STARTERS = ["sausage-broccoli-pesto-pasta","teriyaki-salmon","quesabirria-tacos","chicken-tikka-masala","homemade-mac-cheese"];
 var activeUnsubscribers = [];
 var tourOfferedThisSession = false;
 function clearListeners(){
@@ -1660,6 +1661,7 @@ function attachUserListeners(uid){
       stapleLoaded = true;
     } else if (!stapleLoaded){
       state.staples = DEFAULT_STAPLES.slice();
+      state.hiddenIds = STARTER_RECIPES.filter(function(r){ return (r.tags||[]).indexOf("Cocktail")<0 && NEW_USER_STARTERS.indexOf(r.id)<0; }).map(function(r){ return r.id; });
       savePrivateState();
       stapleLoaded = true;
     }
@@ -3897,7 +3899,7 @@ function renderRecipesTab(){
       '<button class="btn danger" onclick="clearWeek()">Clear all selected</button>');
   }
   if (state.hiddenIds.length){
-    noticeBits.push('<button class="btn secondary" onclick="restoreHidden()">Restore '+state.hiddenIds.length+' removed recipe'+(state.hiddenIds.length===1?"":"s")+'</button>');
+    noticeBits.push('<button class="btn secondary" onclick="restoreHidden()">Show '+state.hiddenIds.length+' more starter recipe'+(state.hiddenIds.length===1?"":"s")+'</button>');
   }
   if (noticeBits.length){
     html += '<div style="margin:-6px 0 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'+noticeBits.join('')+'</div>';
@@ -3977,7 +3979,7 @@ function renderRecipeModal(r){
   (r.steps||[]).forEach(function(s){ html += '<li>'+escapeHtml(s)+'</li>'; });
   html += '</ol>';
   if (r.kidNote){
-    html += '<div class="kid-note"><strong>For the toddler:</strong> '+escapeHtml(r.kidNote)+'</div>';
+    html += '<div class="kid-note"><strong>Kid-friendly tip:</strong> '+escapeHtml(r.kidNote)+'</div>';
   }
 
   if (owned){
@@ -4301,7 +4303,7 @@ function renderRecipeFormModal(){
       '<button type="button" class="btn secondary" onclick="addStepRow()" style="margin-top:6px;font-size:12px;padding:7px 12px;min-height:36px;">+ Add step</button>'+
     '</div>'+
     '<div class="field">'+
-      '<label>Toddler note <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;opacity:.7;">(optional)</span></label>'+
+      '<label>Kid-friendly tip <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;opacity:.7;">(optional)</span></label>'+
       '<input type="text" name="rkidnote" placeholder="e.g. Serve their portion plain before adding sauce" value="'+escapeHtml(kidNoteVal)+'"></div>'+
     '<div class="field">'+
       '<label>Photo <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;opacity:.7;">(optional)</span></label>'+
