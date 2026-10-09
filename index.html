@@ -1555,6 +1555,8 @@ var state = {
 
   // AI features (need API key)
   showSettings:false,
+  photoCache:{},          // recipeId -> {url,credit,link} stock photo, or null if none found
+  photoOff:false,
   receipt:null,           // {busy, error, store, items:[{name,category,keep}]} while the receipt dialog is open
   onboarded:false, showTour:false, tourStep:0, privateLoaded:false,
   deleteAcct:null,        // {pw, busy, error} while the delete-account dialog is open
@@ -1656,6 +1658,7 @@ function attachUserListeners(uid){
       state.recentlyMade = d.recentlyMade || [];
       state.likedRecipes = d.likedRecipes || {};
       state.onboarded = !!d.onboarded;
+      state.photoCache = d.photoCache || {};
       state.nutritionCache = d.nutritionCache || {};
       state.staples = (d.staples && d.staples.length) ? d.staples : DEFAULT_STAPLES.slice();
       stapleLoaded = true;
@@ -1708,6 +1711,7 @@ async function savePrivateState(){
       recentlyMade: state.recentlyMade,
       likedRecipes: state.likedRecipes,
       onboarded: state.onboarded,
+      photoCache: state.photoCache,
       anthropicApiKey: firebase.firestore.FieldValue.delete(),   // retire the old bring-your-own-key field
       nutritionCache: state.nutritionCache
     }, {merge:true});
@@ -3202,7 +3206,44 @@ function recipeCover(r){
     '<text x="200" y="128" font-size="84" text-anchor="middle">'+emoji+'</text></svg>';
   return "data:image/svg+xml;charset=utf-8,"+encodeURIComponent(svg);
 }
-function recipeImg(r){ return (r && r.image) ? r.image : recipeCover(r||{}); }
+function recipeImg(r){
+  if (r && r.image) return r.image;
+  var p = r && state.photoCache[r.id];
+  return (p && p.url) || recipeCover(r||{});
+}
+function photoCredit(r){
+  var p = r && !r.image && state.photoCache[r.id];
+  if (!p || !p.credit) return "";
+  var src = p.source || "Pexels", lk = 'target="_blank" rel="noopener" style="color:var(--amber);"';
+  return '<div style="font-size:11px;padding:5px 14px;color:var(--text-muted);">Photo by <a href="'+escapeHtml(p.link||"#")+'" '+lk+'>'+escapeHtml(p.credit)+'</a> on <a href="'+escapeHtml(p.sourceUrl||"https://www.pexels.com")+'" '+lk+'>'+escapeHtml(src)+'</a></div>';
+}
+// Recipes without a photo get one from Pexels (via our server), looked up once and remembered.
+var photoQueue = [], photoBusy = false, photoRetryAt = 0;
+function queuePhoto(r){
+  if (!r || r.image || state.photoOff || Date.now()<photoRetryAt || (r.id in state.photoCache)) return;
+  if (photoQueue.some(function(q){ return q.id===r.id; })) return;
+  photoQueue.push({id:r.id, name:r.name, drink:(r.tags||[]).indexOf("Cocktail")>-1});
+  if (!photoBusy) setTimeout(runPhotoQueue, 400);
+}
+async function runPhotoQueue(){
+  if (photoBusy) return;
+  photoBusy = true;
+  var got = false;
+  while (photoQueue.length && state.currentUser){
+    var q = photoQueue.shift();
+    try{
+      var d = await apiPost("/api/photo", {query:q.name+(q.drink?" cocktail":" food")});
+      state.photoCache[q.id] = d.photo || null;   // null = nothing found; don't ask again
+      got = true;
+    }catch(e){
+      if (/not configured/i.test(e.message)) state.photoOff = true;
+      else photoRetryAt = Date.now()+60000;        // offline or rate-limited: back off a minute
+      photoQueue.length = 0;
+    }
+  }
+  photoBusy = false;
+  if (got){ savePrivateState(); if (!state.formState) render(); }
+}
 
 // Save our own copy of a remote photo (so social-media thumbnails don't expire later).
 function downscaleDataUrl(dataUrl, max, q){
@@ -3864,6 +3905,7 @@ function renderCocktailsTab(){
 
   html += '<div class="grid">';
   filtered.forEach(function(r){
+    queuePhoto(r);
     var added = inWeek(r.id);
     var shareDoc = shareDocsByStarter[r.id];
     var isPublicSomehow = !!r.isPublic || !!(shareDoc && shareDoc.isPublic);
@@ -3926,6 +3968,7 @@ function renderRecipeListArea(){
 
   html += '<div class="grid">';
   list.forEach(function(r){
+    queuePhoto(r);
     var added = inWeek(r.id);
     var shareDocId = state.starterShares[r.id];
     var shareDoc = shareDocId ? state.myRecipes.filter(function(x){return x.id===shareDocId;})[0] : null;
@@ -3960,7 +4003,7 @@ function renderRecipeModal(r){
   var html = '<div class="overlay" onclick="if(event.target===this) closeModal()"><div class="modal">'+
     '<button class="modal-close" onclick="closeModal()">×</button>'+
     '<div class="modal-scroll">'+
-    '<img src="'+escapeHtml(recipeImg(r))+'" alt="" style="width:100%;height:200px;object-fit:cover;display:block;">'+
+    '<img src="'+escapeHtml(recipeImg(r))+'" alt="" style="width:100%;height:200px;object-fit:cover;display:block;">'+photoCredit(r)+
     '<div class="modal-head"><h2>'+escapeHtml(r.name)+
     (owned && r.isPublic ? ' <span style="font-size:14px;font-family:\'Libre Franklin\',sans-serif;font-weight:700;color:var(--sage-dark);">🌐 Public</span>' : '')+
     (isStarter && starterIsPublic ? ' <span style="font-size:14px;font-family:\'Libre Franklin\',sans-serif;font-weight:700;color:var(--sage-dark);">🌐 Public</span>' : '')+
