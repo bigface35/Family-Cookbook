@@ -2,7 +2,7 @@
    Mise — Service Worker  (cookmise.app)
    Bump CACHE_VERSION with every deploy to push updates to all users.
    ========================================================= */
-var CACHE_VERSION = 'v4';
+var CACHE_VERSION = 'v5';
 var CACHE_NAME = 'mise-' + CACHE_VERSION;
 
 var SHELL_FILES = [
