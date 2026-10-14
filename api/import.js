@@ -75,7 +75,7 @@ function nodeImage(node, base) {
   return absUrl(u, base);
 }
 function slimNode(node) {
-  const keep = ['name', 'recipeIngredient', 'ingredients', 'recipeInstructions', 'recipeYield', 'totalTime', 'cookTime', 'prepTime', 'recipeCuisine', 'description'];
+  const keep = ['name', 'recipeIngredient', 'ingredients', 'recipeInstructions', 'recipeYield', 'totalTime', 'cookTime', 'prepTime', 'recipeCuisine', 'recipeCategory', 'keywords', 'description'];
   const o = {};
   keep.forEach(k => { if (node[k] !== undefined) o[k] = node[k]; });
   return o;
@@ -161,8 +161,9 @@ async function youtubeSource(url) {
 }
 
 /* ---------- AI extraction ---------- */
-function normalizeDraft(d) {
+function normalizeDraft(d, forceDrink) {
   if (!d || typeof d !== 'object') return null;
+  const drink = !!forceDrink || d.drink === true;
   const ings = (Array.isArray(d.ingredients) ? d.ingredients : []).map(i => {
     if (!i || !i.name) return null;
     const amt = typeof i.amount === 'number' ? i.amount : (parseFloat(i.amount) || null);
@@ -172,22 +173,25 @@ function normalizeDraft(d) {
   if (!d.name || (!ings.length && !steps.length)) return null;
   return {
     name: String(d.name).slice(0, 120), time: d.time ? String(d.time) : '', servings: parseInt(d.servings, 10) || 4,
-    tags: Array.isArray(d.tags) ? d.tags.map(String).slice(0, 5) : [], kidFriendly: !!d.kidFriendly, kidNote: d.kidNote ? String(d.kidNote) : '',
+    tags: (Array.isArray(d.tags) ? d.tags.map(String).slice(0, 5) : []).filter(t => !(drink && /^cocktail$/i.test(t))).concat(drink ? ['Cocktail'] : []),
+    kidFriendly: drink ? false : !!d.kidFriendly, kidNote: drink ? '' : (d.kidNote ? String(d.kidNote) : ''),
     ingredients: ings, steps
   };
 }
-async function aiExtract(text, hint) {
+async function aiExtract(text, hint, cocktail) {
   const raw = await claude({
     tier: 'fast', maxTokens: 2500,
     system: 'You extract recipes from messy text (blog pages, social captions, video descriptions/transcripts). Respond ONLY with valid JSON, no markdown. Never invent quantities or steps that the text does not support; if the text only names a dish without a method, return null.',
     content: (hint ? 'Source: ' + hint + '\n\n' : '') + 'Extract the recipe from the text below.\n\n---\n' + text + '\n---\n\n' +
       'Return ONLY this JSON, or the word null if there is no real recipe:\n' +
-      '{"name":"Recipe Name","time":"30 min","servings":4,"tags":["Quick"],"kidFriendly":false,"kidNote":"",' +
+      '{"name":"Recipe Name","time":"30 min","servings":4,"drink":false,"tags":["Quick"],"kidFriendly":false,"kidNote":"",' +
       '"ingredients":[{"amount":2,"unit":"cups","name":"flour","category":"Pantry & Dry Goods"}],"steps":["Step 1.","Step 2."]}\n' +
-      'Use amount:null for "to taste". Split combined steps into clear single actions. Valid categories: ' + CATS + '.'
+      'Use amount:null for "to taste". Split combined steps into clear single actions. Valid categories: ' + CATS + '.\n' +
+      'Set "drink" to true if this is a cocktail or other alcoholic/mixed drink' + (cocktail ? ' (the user is importing a cocktail, so it should be true)' : '') + ', else false. ' +
+      'For a drink: servings is the number of drinks, put spirits, liqueurs, bitters and mixers in the "Spirits & Mixers" category, and use short style tags such as Tiki, Classic or Quick.'
   });
   if (/^\s*null\s*$/i.test(raw)) return null;
-  return normalizeDraft(extractJson(raw, '{', '}'));
+  return normalizeDraft(extractJson(raw, '{', '}'), cocktail);
 }
 
 /* ---------- Handler ---------- */
@@ -198,7 +202,7 @@ module.exports = handle(async (req, res) => {
 
   // Pasted text path (caption copied from Instagram, etc.)
   if (b.text && !b.url) {
-    const draft = await aiExtract(focusText(String(b.text).slice(0, 30000)), 'pasted text');
+    const draft = await aiExtract(focusText(String(b.text).slice(0, 30000)), 'pasted text', !!b.cocktail);
     if (!draft) throw httpError(422, "I couldn't find a complete recipe in that text.");
     return send(res, 200, { ok: true, source: 'ai', draft, image: '' });
   }
@@ -215,7 +219,7 @@ module.exports = handle(async (req, res) => {
     if (text.length < 40) {
       throw httpError(422, "That post didn't share its caption with us (private, or the app hides it). Copy the caption text and paste it in the box below, and I'll take it from there.");
     }
-    const draft = await aiExtract(focusText(text), h);
+    const draft = await aiExtract(focusText(text), h, !!b.cocktail);
     if (!draft) throw httpError(422, "I read the post but it doesn't include a full recipe (often it's only in the video). If the full recipe is in the comments or on their website, paste that instead.");
     return send(res, 200, { ok: true, source: 'ai-social', draft, image: src.image || '' });
   }
@@ -233,7 +237,7 @@ module.exports = handle(async (req, res) => {
   // No structured data: let Claude read the page text
   const text = focusText(htmlToText(html));
   if (text.length < 200) throw httpError(422, "Couldn't read a recipe on that page. Try pasting the text instead.");
-  const draft = await aiExtract(text, titleOf(html) + ' (' + h + ')');
+  const draft = await aiExtract(text, titleOf(html) + ' (' + h + ')', !!b.cocktail);
   if (!draft) throw httpError(422, "Couldn't find a recipe on that page. Try pasting the ingredients and steps instead.");
   send(res, 200, { ok: true, source: 'ai', draft, image: absUrl(image, page.url) });
 });
