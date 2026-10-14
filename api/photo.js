@@ -19,7 +19,7 @@ module.exports = handle(async (req, res) => {
       const r = await fetch('https://api.unsplash.com/search/photos?per_page=10&orientation=landscape&query=' + encodeURIComponent(q), { headers: { Authorization: 'Client-ID ' + uKey } });
       if (r.status === 403 || r.status === 429) throw httpError(503, 'Photo service is busy. Try again later.');
       if (!r.ok) throw httpError(502, 'Photo service had a problem.');
-      list = ((await r.json()).results || []).map(p => ({ url: p.urls.regular, credit: p.user.name, link: p.links.html + '?utm_source=mise&utm_medium=referral', source: 'Unsplash', sourceUrl: 'https://unsplash.com/?utm_source=mise&utm_medium=referral', dl: p.links.download_location }));
+      list = ((await r.json()).results || []).map(p => ({ url: p.urls.regular, credit: p.user.name, link: p.user.links.html + '?utm_source=mise&utm_medium=referral', source: 'Unsplash', sourceUrl: 'https://unsplash.com/?utm_source=mise&utm_medium=referral', dl: p.links.download_location }));
     } else {
       const r = await fetch('https://api.pexels.com/v1/search?per_page=10&orientation=landscape&query=' + encodeURIComponent(q), { headers: { Authorization: pKey } });
       if (r.status === 429) throw httpError(503, 'Photo service is busy. Try again later.');
