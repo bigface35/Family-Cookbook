@@ -2457,6 +2457,8 @@ function dismissMigrationBanner(){ state.showMigrationBanner = false; render(); 
 
 // Detect URLs sent to Mise via the OS share sheet (Web Share Target API).
 // Runs immediately on load, before auth — stores URL for processing after sign-in.
+var launchInfo = window.location.search ? window.location.search.slice(0,300) : "(no link attached)";
+try{ launchInfo = decodeURIComponent(launchInfo.replace(/\+/g," ")); }catch(e){}
 function checkShareTarget(){
   var params = new URLSearchParams(window.location.search);
   var sharedUrl  = params.get("shared_url")  || "";
@@ -3537,6 +3539,7 @@ function renderSettingsModal(){
     '<a href="/privacy.html" target="_blank" rel="noopener" style="color:var(--amber);">Privacy policy</a><br>'+
     '<a href="/delete-account.html" target="_blank" rel="noopener" style="color:var(--amber);">Account and data deletion</a>'+
     '</div>'+
+    '<div style="margin-top:12px;font-size:12px;color:var(--text-muted);word-break:break-all;">This launch: '+escapeHtml(launchInfo)+'</div>'+
     '<div style="margin-top:12px;"><button class="btn danger" onclick="openDeleteAccount()">Delete account…</button></div>'+
 
     '<div class="modal-actions">'+
