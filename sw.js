@@ -2,7 +2,7 @@
    Mise — Service Worker  (cookmise.app)
    Bump CACHE_VERSION with every deploy to push updates to all users.
    ========================================================= */
-var CACHE_VERSION = 'v6';
+var CACHE_VERSION = 'v7';
 var CACHE_NAME = 'mise-' + CACHE_VERSION;
 
 var SHELL_FILES = [
@@ -65,9 +65,8 @@ self.addEventListener('fetch', function(event){
     event.respondWith(
       fetch(event.request).then(function(response){
         if (response && response.status === 200){
-          caches.open(CACHE_NAME).then(function(cache){
-            cache.put(event.request, response.clone());
-          });
+          var copy = response.clone();   // clone now: the page consumes the body right after we return it
+          caches.open(CACHE_NAME).then(function(cache){ cache.put(event.request, copy); });
         }
         return response;
       }).catch(function(){
@@ -80,9 +79,8 @@ self.addEventListener('fetch', function(event){
       caches.match(event.request).then(function(cached){
         var fetchPromise = fetch(event.request).then(function(response){
           if (response && response.status === 200){
-            caches.open(CACHE_NAME).then(function(cache){
-              cache.put(event.request, response.clone());
-            });
+            var copy = response.clone();
+            caches.open(CACHE_NAME).then(function(cache){ cache.put(event.request, copy); });
           }
           return response;
         }).catch(function(){ return cached; });
