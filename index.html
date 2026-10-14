@@ -1405,7 +1405,7 @@ function allCocktails(){
   return starters.concat(ownedCocktails);
 }
 function findRecipe(id){
-  var all = allRecipes();
+  var all = allRecipes().concat(allCocktails());
   for (var i=0;i<all.length;i++){ if (all[i].id===id) return all[i]; }
   var pub = state.publicRecipes.filter(function(r){ return r.id===id; })[0];
   if (pub) return pub;
@@ -1569,7 +1569,7 @@ function signOutUser(){
 /* ---- First-launch tour ---- */
 var TOUR_STEPS = [
   {art:"📲", orbit:["📸","🎬","🌐"], title:"Bring in any recipe",
-   text:"Paste a link from Instagram, TikTok, YouTube or any recipe site — Mise reads it and builds a clean recipe with a photo. On Android you can also use Share → Mise."},
+   text:"Paste a link from Instagram, TikTok, YouTube or any recipe site — Mise reads it and builds a clean recipe with a photo. From Instagram or TikTok, tap Share, then Copy link, then open Import and tap Paste link."},
   {art:"📅", orbit:["✨","🍝","🥗"], title:"Plan your week",
    text:"Tap “+ This week” on anything you're craving, or let ✨ Generate plan suggest seven dinners from your own recipes."},
   {art:"🛒", orbit:["🧾","🥕","🥛"], title:"One smart shopping list",
@@ -2751,11 +2751,20 @@ function recipeNodeToDraft(node){
     else if (Array.isArray(node.image)) image=typeof node.image[0]==="string"?node.image[0]:(node.image[0]&&node.image[0].url)||"";
     else if (node.image.url) image=node.image.url;
   }
+  var cat = [node.recipeCategory, node.keywords].map(function(x){ return Array.isArray(x)?x.join(" "):String(x||""); }).join(" ");
+  if (/cocktail|mixed drink|bartend/i.test(cat) || /\bcocktail\b/i.test(name)) tags.unshift("Cocktail");
   return {name:name, ingredients:ingredients, steps:steps, servings:servings, time:time, tags:tags, kidFriendly:false, image:image};
 }
 
+function markCocktail(draft){
+  draft.tags = (draft.tags||[]).filter(function(t){ return t!=="Cocktail"; });
+  draft.tags.unshift("Cocktail");
+  draft.kidFriendly = false; draft.kidNote = "";
+}
 function startImportDraft(draft, image){
   draft.image = image || draft.image || "";
+  if (state.importCocktail) markCocktail(draft);
+  state.importCocktail = false;
   state.importDraft = draft;
   state.importMode = false;
   state.formState = {mode:"add", recipeId:null, ingRows: (draft.ingredients||[]).length || 4, pendingImage:null, existingImage:draft.image||""};
@@ -2772,7 +2781,7 @@ async function handleUrlImport(){
   if (progEl) progEl.style.display = "block";
   if (statusEl) statusEl.textContent = /instagram|tiktok|youtu/i.test(url) ? "Reading the post…" : "Reading the page…";
   try{
-    var d = await apiPost("/api/import", {url:url});
+    var d = await apiPost("/api/import", {url:url, cocktail:!!state.importCocktail});
     var draft;
     if (d.source==="jsonld"){
       draft = recipeNodeToDraft(d.node);
@@ -2803,13 +2812,32 @@ async function handleTextImport(){
   if (progEl) progEl.style.display = "block";
   if (statusEl) statusEl.textContent = "Reading the recipe…";
   try{
-    var d = await apiPost("/api/import", {text:text});
+    var d = await apiPost("/api/import", {text:text, cocktail:!!state.importCocktail});
     state.importBusy = false;
     startImportDraft(d.draft, "");
   }catch(e){
     state.importBusy = false;
     if (progEl) progEl.style.display = "none";
     if (statusEl) statusEl.textContent = (e && e.message) ? e.message : "Couldn't read that text.";
+  }
+}
+
+async function pasteAndImport(){
+  var statusEl = document.getElementById("import-status");
+  var txt = "";
+  try{ txt = await navigator.clipboard.readText(); }
+  catch(e){ if (statusEl) statusEl.textContent = "Couldn't read your clipboard. Paste the link into the box instead."; return; }
+  var link = (txt.match(/https?:\/\/[^\s<>"']+/i)||[])[0];
+  if (link){
+    var inp = document.getElementById("import-url-input");
+    if (inp) inp.value = link;
+    handleUrlImport();
+  } else if (txt.trim().length >= 30){
+    var ta = document.getElementById("import-text-input");
+    if (ta) ta.value = txt.trim();
+    handleTextImport();
+  } else if (statusEl){
+    statusEl.textContent = "Copy a link (or the recipe text) first, then tap Paste again.";
   }
 }
 
@@ -2827,12 +2855,15 @@ function handlePasteImport(){
     return;
   }
   state.importDraft = {name:name, ingredients:ingredients, steps:stepLines, servings:4, time:"", tags:[], kidFriendly:false};
+  if (state.importCocktail) markCocktail(state.importDraft);
+  state.importCocktail = false;
   state.importMode = false;
   state.formState = {mode:"add", recipeId:null, ingRows: ingredients.length || 4};
   render();
 }
 
-function openImportModal(){
+function openImportModal(isCocktail){
+  state.importCocktail = isCocktail===true;
   state.importMode = true;
   state.modalRecipe = null;
   state.formState = null;
@@ -2840,6 +2871,7 @@ function openImportModal(){
 }
 function closeImportModal(){
   state.importMode = false;
+  state.importCocktail = false;
   render();
 }
 
@@ -2953,9 +2985,9 @@ function clearChecks(){
 }
 
 /* ---- Add / edit / remove recipes ---- */
-function openAddForm(){
+function openAddForm(isCocktail){
   state.importDraft = null;
-  state.formState = {mode:"add", recipeId:null, ingRows:4, pendingImage:null, existingImage:""};
+  state.formState = {mode:"add", recipeId:null, ingRows:4, pendingImage:null, existingImage:"", cocktail:isCocktail===true};
   state.modalRecipe = null;
   render();
 }
@@ -3206,10 +3238,13 @@ async function submitRecipeForm(ev){
   if (!name) return;
   var tagsRaw = f.querySelector("[name=rtags]").value.trim();
   var tags = tagsRaw ? tagsRaw.split(",").map(function(t){return t.trim();}).filter(Boolean) : [];
+  var isCocktail = !!f.querySelector("[name=rcocktail]");
+  if (isCocktail && tags.indexOf("Cocktail")<0) tags.unshift("Cocktail");
   var time = f.querySelector("[name=rtime]").value.trim() || "—";
-  var servings = parseInt(f.querySelector("[name=rservings]").value,10) || 4;
-  var kidFriendly = f.querySelector("[name=rkid]").checked;
-  var kidNote = f.querySelector("[name=rkidnote]").value.trim();
+  var servings = parseInt(f.querySelector("[name=rservings]").value,10) || (isCocktail ? 1 : 4);
+  var kidEl = f.querySelector("[name=rkid]"), kidNoteEl = f.querySelector("[name=rkidnote]");
+  var kidFriendly = kidEl ? kidEl.checked : false;
+  var kidNote = kidNoteEl ? kidNoteEl.value.trim() : "";
   var stepsRaw = f.querySelector("[name=rsteps]");
   var steps = stepsRaw
     ? stepsRaw.value.trim().split("\n").map(function(s){return s.trim();}).filter(Boolean)
@@ -3264,7 +3299,7 @@ async function submitRecipeForm(ev){
   state.formState = null;
   state.modalRecipe = null;
   state.importDraft = null;
-  state.tab = "recipes";
+  state.tab = isCocktail ? "cocktails" : "recipes";
   render();
 }
 
@@ -3475,7 +3510,7 @@ function renderCommunityTab(){
       '<div class="rcard-meta">'+
       (r.time?'<span>'+escapeHtml(r.time)+'</span>':'')+
       '<span>Serves '+(r.servings||4)+'</span>'+
-      (r.kidFriendly?'<span class="ok">Kid-friendly</span>':'')+
+      (r.kidFriendly && !isCocktailRecipe(r)?'<span class="ok">Kid-friendly</span>':'')+
       (mine ? '<span>'+(r.likes||0)+' like'+((r.likes||0)===1?"":"s")+'</span>' : '')+
       '</div></div></div>';
   });
@@ -3692,7 +3727,7 @@ function recipeCardHtml(r, isCocktail){
     '<div class="rcard-meta">'+
     (r.time?'<span>'+escapeHtml(r.time)+'</span>':'')+
     '<span>Serves '+(r.servings||(isCocktail?1:4))+'</span>'+
-    (r.kidFriendly?'<span class="ok">Kid-friendly</span>':'')+
+    (r.kidFriendly && !isCocktail?'<span class="ok">Kid-friendly</span>':'')+
     (isPublicSomehow?'<span class="ok">Shared</span>':'')+
     '</div></div></div>';
 }
@@ -3744,8 +3779,9 @@ function renderCocktailsTab(){
   var html = '<div class="toolbar">'+
     '<div class="search-wrap">'+icon("search")+'<input class="search-input" type="text" placeholder="Search cocktails" aria-label="Search cocktails" value="'+escapeHtml(state.search)+'" oninput="setSearch(this.value)"></div>'+
     '<div class="toolbar-actions">'+
-    '<button class="btn secondary" onclick="setFindRecipeType(\'cocktail\');openFindRecipe()">'+icon("spark")+'Find a cocktail</button>'+
-    '<button class="btn" onclick="openAddForm()">'+icon("plus")+'Add</button>'+
+    '<button class="btn secondary" onclick="setFindRecipeType(\'cocktail\');openFindRecipe()">'+icon("spark")+'Find</button>'+
+    '<button class="btn secondary" onclick="openImportModal(true)">'+icon("link")+'Import</button>'+
+    '<button class="btn" onclick="openAddForm(true)">'+icon("plus")+'Add</button>'+
     '</div></div>';
   html += '<div id="recipe-list-area">'+renderCocktailListArea()+'</div>';
   return html;
@@ -3844,8 +3880,8 @@ function renderRecipeModal(r){
     ((owned && r.isPublic) || (isStarter && starterIsPublic) ? '<span class="ok">Shared with Community</span>' : '')+
     '</div>'+
     ((r.kidFriendly || (r.tags||[]).length) ? '<div class="modal-tags">'+
-      (r.kidFriendly?'<span class="kid">Kid-friendly</span>':'')+
-      (r.tags||[]).filter(function(t){ return !(r.kidFriendly && t==="Kid-Friendly"); }).map(function(t){ return '<span>'+escapeHtml(t)+'</span>'; }).join('')+
+      (r.kidFriendly && !isCocktailRecipe(r)?'<span class="kid">Kid-friendly</span>':'')+
+      (r.tags||[]).filter(function(t){ return !(r.kidFriendly && t==="Kid-Friendly") && t!=="Cocktail"; }).map(function(t){ return '<span>'+escapeHtml(t)+'</span>'; }).join('')+
     '</div>' : '')+
     '</div>'+
     '<div class="modal-body">';
@@ -3858,7 +3894,7 @@ function renderRecipeModal(r){
   html += '<h4>Steps</h4><ol class="steps-list">';
   (r.steps||[]).forEach(function(s){ html += '<li>'+escapeHtml(s)+'</li>'; });
   html += '</ol>';
-  if (r.kidNote){
+  if (r.kidNote && !isCocktailRecipe(r)){
     html += '<div class="kid-note"><strong>Kid-friendly tip:</strong> '+escapeHtml(r.kidNote)+'</div>';
   }
 
@@ -4135,10 +4171,11 @@ function renderRecipeFormModal(){
     for (var i=0;i<(fs.ingRows||4);i++) rowsHtml += ingRowHtml(null);
   }
 
+  var isCocktail = isEdit ? isCocktailRecipe(recipe) : (fs.cocktail===true || (!!recipe && isCocktailRecipe(recipe)));
   var nameVal = recipe ? recipe.name : "";
   var timeVal = recipe ? recipe.time : "";
   var servingsVal = recipe ? recipe.servings : "";
-  var tagsVal = recipe ? (recipe.tags||[]).join(", ") : "";
+  var tagsVal = recipe ? (recipe.tags||[]).filter(function(t){ return !isCocktail || t!=="Cocktail"; }).join(", ") : "";
   var kidChecked = recipe && recipe.kidFriendly ? "checked" : "";
   var kidNoteVal = recipe && recipe.kidNote ? recipe.kidNote : "";
   var stepsVal = recipe ? (recipe.steps||[]).join("\n") : "";
@@ -4154,8 +4191,9 @@ function renderRecipeFormModal(){
   }
 
   var isImport = !isEdit && !!state.importDraft;
-  var heading = isEdit ? "Edit recipe" : (isImport ? "Review imported recipe" : "Add a recipe");
-  var sub = isEdit ? "Tweak it to match how you actually make it" : (isImport ? "Double-check the details, then save it to the cookbook" : "Add a recipe to the cookbook");
+  var noun = isCocktail ? "cocktail" : "recipe";
+  var heading = isEdit ? "Edit "+noun : (isImport ? "Review imported "+noun : "Add a "+noun);
+  var sub = isEdit ? "Tweak it to match how you actually make it" : (isImport ? "Double-check the details, then save it" : (isCocktail ? "Add a cocktail to your bar" : "Add a recipe to the cookbook"));
 
   var html = '<div class="overlay" onclick="if(event.target===this) closeModal()"><div class="modal">'+
     '<button class="modal-close" onclick="closeModal()">×</button>'+
@@ -4163,13 +4201,14 @@ function renderRecipeFormModal(){
     '<div class="modal-head"><h2>'+heading+'</h2>'+
     '<div class="rcard-meta">'+sub+'</div></div>'+
     '<div class="modal-body"><form id="recipe-form">'+
-    '<div class="field"><label>Recipe name</label><input type="text" name="rname" value="'+escapeHtml(nameVal)+'" required autocomplete="off"></div>'+
+    (isCocktail ? '<input type="hidden" name="rcocktail" value="1">' : '')+
+    '<div class="field"><label>'+(isCocktail?"Cocktail":"Recipe")+' name</label><input type="text" name="rname" value="'+escapeHtml(nameVal)+'" required autocomplete="off"></div>'+
     '<div class="field" style="display:flex;gap:12px;">'+
       '<div style="flex:1;"><label>Time</label><input type="text" name="rtime" placeholder="e.g. 30 min" value="'+escapeHtml(timeVal)+'"></div>'+
       '<div style="flex:1;"><label>Servings</label><input type="number" name="rservings" placeholder="4" min="1" value="'+escapeHtml(servingsVal)+'"></div>'+
     '</div>'+
-    '<div class="field"><label>Tags (comma separated)</label><input type="text" name="rtags" placeholder="e.g. Mexican, Quick" value="'+escapeHtml(tagsVal)+'"></div>'+
-    '<div class="field checkbox-row"><input type="checkbox" name="rkid" id="rkid" '+kidChecked+'><label for="rkid" style="margin:0;font-weight:400;text-transform:none;letter-spacing:0;font-size:14px;">Kid-friendly</label></div>'+
+    '<div class="field"><label>Tags (comma separated)</label><input type="text" name="rtags" placeholder="'+(isCocktail?"e.g. Tiki, Classic, Quick":"e.g. Mexican, Quick")+'" value="'+escapeHtml(tagsVal)+'"></div>'+
+    (isCocktail ? '' : '<div class="field checkbox-row"><input type="checkbox" name="rkid" id="rkid" '+kidChecked+'><label for="rkid" style="margin:0;font-weight:400;text-transform:none;letter-spacing:0;font-size:14px;">Kid-friendly</label></div>')+
     '<div class="field">'+
       '<label>Ingredients <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;opacity:.7;">— grab ⠿ to reorder</span></label>'+
       '<div id="ing-rows">'+rowsHtml+'</div>'+
@@ -4180,9 +4219,9 @@ function renderRecipeFormModal(){
       '<div id="step-rows">'+stepsHtml+'</div>'+
       '<button type="button" class="btn secondary" onclick="addStepRow()" style="margin-top:6px;font-size:12px;padding:7px 12px;min-height:36px;">+ Add step</button>'+
     '</div>'+
-    '<div class="field">'+
+    (isCocktail ? '' : '<div class="field">'+
       '<label>Kid-friendly tip <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;opacity:.7;">(optional)</span></label>'+
-      '<input type="text" name="rkidnote" placeholder="e.g. Serve their portion plain before adding sauce" value="'+escapeHtml(kidNoteVal)+'"></div>'+
+      '<input type="text" name="rkidnote" placeholder="e.g. Serve their portion plain before adding sauce" value="'+escapeHtml(kidNoteVal)+'"></div>')+
     '<div class="field">'+
       '<label>Photo <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;opacity:.7;">(optional)</span></label>'+
       '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:4px;">'+
@@ -4206,8 +4245,8 @@ function renderImportModal(){
   var html = '<div class="overlay" onclick="if(event.target===this) closeImportModal()"><div class="modal">'+
     '<button class="modal-close" onclick="closeImportModal()">×</button>'+
     '<div class="modal-scroll">'+
-    '<div class="modal-head"><h2>Import a recipe</h2>'+
-    '<div class="rcard-meta">From any recipe site, Instagram, TikTok, YouTube — or paste it</div></div>'+
+    '<div class="modal-head"><h2>Import a '+(state.importCocktail?"cocktail":"recipe")+'</h2>'+
+    '<div class="rcard-meta">From any '+(state.importCocktail?"cocktail":"recipe")+' site, Instagram, TikTok, YouTube, or paste it</div></div>'+
     '<div class="modal-body">'+
 
     '<div class="field"><label>Paste a link</label>'+
@@ -4215,6 +4254,7 @@ function renderImportModal(){
     '<input type="text" id="import-url-input" placeholder="https://…" inputmode="url" autocapitalize="off" style="flex:1;" onkeydown="if(event.key===\'Enter\') handleUrlImport()">'+
     '<button type="button" class="btn" onclick="handleUrlImport()">Import</button>'+
     '</div>'+
+    '<button type="button" class="btn secondary" onclick="pasteAndImport()" style="width:100%;margin-top:8px;">Paste link from clipboard</button>'+
     '<div class="progress-bar" id="import-progress" style="display:none;margin-top:8px;"><div class="progress-bar-fill"></div></div>'+
     '<div id="import-status" style="font-size:13px;color:var(--text-soft);margin-top:6px;min-height:16px;"></div>'+
     '<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Tip: in Instagram or TikTok, tap Share, then Copy link, and paste it here. If a post keeps its recipe in the caption, we read it for you.</div>'+
