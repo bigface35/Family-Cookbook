@@ -1569,7 +1569,7 @@ function signOutUser(){
 /* ---- First-launch tour ---- */
 var TOUR_STEPS = [
   {art:"📲", orbit:["📸","🎬","🌐"], title:"Bring in any recipe",
-   text:"Paste a link from Instagram, TikTok, YouTube or any recipe site — Mise reads it and builds a clean recipe with a photo. From Instagram or TikTok, tap Share, then Copy link, then open Import and tap Paste link."},
+   text:"Paste a link from Instagram, TikTok, YouTube or any recipe site — Mise reads it and builds a clean recipe with a photo. From Instagram or TikTok, tap Share, then Copy link, then open Mise and tap Import."},
   {art:"📅", orbit:["✨","🍝","🥗"], title:"Plan your week",
    text:"Tap “+ This week” on anything you're craving, or let ✨ Generate plan suggest seven dinners from your own recipes."},
   {art:"🛒", orbit:["🧾","🥕","🥛"], title:"One smart shopping list",
@@ -2872,6 +2872,17 @@ function openImportModal(isCocktail){
   state.modalRecipe = null;
   state.formState = null;
   render();
+  autoPasteSocial();
+}
+// Tapping Import while an Instagram/TikTok/YouTube link is on the clipboard starts the import right away
+function autoPasteSocial(){
+  if (!(navigator.clipboard && navigator.clipboard.readText)) return;
+  navigator.clipboard.readText().then(function(t){
+    var link = ((t||"").match(/https?:\/\/[^\s<>"']+/i)||[])[0];
+    if (!link || !state.importMode || !/instagram\.com|instagr\.am|tiktok\.com|youtu/i.test(link)) return;
+    var inp = document.getElementById("import-url-input");
+    if (inp && !inp.value){ inp.value = link; handleUrlImport(); }
+  }).catch(function(){});
 }
 function closeImportModal(){
   state.importMode = false;
