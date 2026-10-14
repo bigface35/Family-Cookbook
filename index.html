@@ -2799,6 +2799,8 @@ async function handleUrlImport(){
     state.importBusy = false;
     if (progEl) progEl.style.display = "none";
     if (statusEl) statusEl.textContent = (e && e.message) ? e.message : "Couldn't import that link — try pasting the text below instead.";
+    var ta = document.getElementById("import-text-input");   // caption couldn't be read: put the cursor where the paste goes
+    if (ta && /instagram|tiktok|youtu/i.test(url)){ try{ ta.scrollIntoView({block:"center"}); ta.focus(); }catch(er){} }
   }
 }
 async function handleTextImport(){
