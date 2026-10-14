@@ -2318,7 +2318,7 @@ async function selectFindResult(id, type){
     }
     hideProg(); setStatus("");
     state.importDraft=draft;
-    state.formState={mode:"add",recipeId:null,ingRows:draft.ingredients.length||4};
+    state.formState={mode:"add",recipeId:null,ingRows:draft.ingredients.length||4,pendingImage:null,existingImage:draft.image||""};
     state.findRecipeMode=false; state.findRecipeResults=[];
     render();
   }catch(e){
@@ -2946,7 +2946,7 @@ function startImportDraft(draft, image){
   draft.image = image || draft.image || "";
   state.importDraft = draft;
   state.importMode = false;
-  state.formState = {mode:"add", recipeId:null, ingRows: (draft.ingredients||[]).length || 4};
+  state.formState = {mode:"add", recipeId:null, ingRows: (draft.ingredients||[]).length || 4, pendingImage:null, existingImage:draft.image||""};
   render();
 }
 async function handleUrlImport(){
@@ -4309,7 +4309,7 @@ function renderRecipeFormModal(){
   var stepsVal = recipe ? (recipe.steps||[]).join("\n") : "";
 
   // Determine current image for the photo section
-  var currentImage = (fs.pendingImage || fs.existingImage || (recipe&&recipe.image) || "");
+  var currentImage = (fs.pendingImage || fs.existingImage || "");
 
   var stepsHtml = "";
   if (recipe && recipe.steps && recipe.steps.length){
