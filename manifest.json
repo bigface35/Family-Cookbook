@@ -6,8 +6,8 @@
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#0d0d12",
-  "theme_color": "#0d0d12",
+  "background_color": "#181614",
+  "theme_color": "#181614",
   "icons": [
     {
       "src": "/icon-192.png",
@@ -23,7 +23,7 @@
     }
   ],
   "share_target": {
-    "action": "/",
+    "action": "https://cookmise.app/",
     "method": "GET",
     "params": {
       "title": "shared_title",
