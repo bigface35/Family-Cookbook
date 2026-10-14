@@ -84,49 +84,73 @@ function slimNode(node) {
 /* ---------- Social sources ---------- */
 function host(u) { try { return new URL(u).hostname.replace(/^www\./, '').replace(/^m\./, ''); } catch (e) { return ''; } }
 
-async function igSource(url) {
-  const m = url.match(/instagram\.com\/(?:[^/]+\/)?(p|reel|reels|tv)\/([A-Za-z0-9_-]+)/i);
-  let text = '', image = '', title = '';
-  if (m) {
-    const kind = m[1] === 'reels' ? 'reel' : m[1];
-    try {
-      const r = await safeFetch('https://www.instagram.com/' + kind + '/' + m[2] + '/embed/captioned/', { timeoutMs: 9000 });
-      if (r.ok) {
-        const cap = r.text.match(/<div class="Caption"[\s\S]*?<\/div>\s*<\/div>/i);
-        text = htmlToText(cap ? cap[0] : r.text);
-        const im = r.text.match(/class="EmbeddedMediaImage"[^>]*src="([^"]+)"/i);
-        if (im) image = decodeEntities(im[1]);
-      }
-    } catch (e) { /* fall through to og tags */ }
-  }
-  if (text.length < 80 || !image) {
-    try {
-      const r = await safeFetch(url, { ua: FB_UA, timeoutMs: 9000 });
-      if (r.ok) {
-        const d = meta(r.text, ['og:description', 'description']);
-        if (d && d.length > text.length) text = d;
-        image = image || meta(r.text, ['og:image']);
-        title = meta(r.text, ['og:title']);
-      }
-    } catch (e) {}
-  }
-  return { text, image, title };
+/* Instagram/TikTok block datacenter IPs unpredictably, so try every public door in parallel and keep the longest caption. */
+function jsonStr(html, keyRe) {
+  // first JSON string value following keyRe in plain JSON (shortcut: doesn't read JSON nested inside another string)
+  const m = html.match(new RegExp(keyRe.source + '\\s*:\\s*"((?:[^"\\\\]|\\\\.)*?)"', keyRe.flags));
+  if (!m) return '';
+  try { return JSON.parse('"' + m[1] + '"'); } catch (e) { return ''; }
+}
+function cleanIgDesc(s) {
+  // og:description looks like: 12K likes, 340 comments - user on March 3, 2024: "caption".
+  return decodeEntities(s || '').replace(/^[\d.,KkMm]+\s+likes?,\s*[\d.,KkMm]+\s+comments?\s*-\s*[^:]{0,80}?\s+on\s+[^:]{0,40}:\s*["“]?/i, '')
+    .replace(/^[^:]{0,60}\son Instagram:\s*["“]?/i, '').replace(/["”]\.?\s*$/, '').trim();
+}
+async function tryFetch(label, diag, url, opts) {
+  try {
+    const r = await safeFetch(url, Object.assign({ timeoutMs: 6000 }, opts));
+    diag.push(label + ':' + r.status + '/' + r.text.length);
+    return r;
+  } catch (e) { diag.push(label + ':err'); return null; }
 }
 
-async function tiktokSource(url) {
-  let text = '', image = '', title = '';
-  try {
-    const r = await safeFetch('https://www.tiktok.com/oembed?url=' + encodeURIComponent(url), { timeoutMs: 9000, accept: 'application/json' });
-    if (r.ok) { const d = JSON.parse(r.text); text = d.title || ''; image = d.thumbnail_url || ''; title = d.title || ''; }
-  } catch (e) {}
-  if (!text) {
-    try {
-      const r = await safeFetch(url, { timeoutMs: 9000 });
-      text = meta(r.text, ['og:description', 'description']) || '';
-      image = meta(r.text, ['og:image']);
-    } catch (e) {}
+async function igSource(url, diag) {
+  const m = url.match(/instagram\.com\/(?:[^/]+\/)?(p|reel|reels|tv)\/([A-Za-z0-9_-]+)/i);
+  const cands = []; let image = '';
+  const jobs = [];
+  if (m) {
+    const kind = m[1] === 'reels' ? 'reel' : m[1];
+    jobs.push(tryFetch('embed', diag, 'https://www.instagram.com/' + kind + '/' + m[2] + '/embed/captioned/').then(r => {
+      if (!r || !r.ok) return;
+      const cap = r.text.match(/<div class="Caption"[\s\S]*?<\/div>\s*<\/div>/i);
+      if (cap) cands.push(htmlToText(cap[0]).replace(/^\S+\s*\n?/, ''));
+      const j = jsonStr(r.text, /"caption"/) || jsonStr(r.text, /"text"/);
+      if (j) cands.push(j);
+      const im = r.text.match(/class="EmbeddedMediaImage"[^>]*src="([^"]+)"/i);
+      if (im) image = image || decodeEntities(im[1]);
+    }));
   }
-  return { text, image, title };
+  ['facebookexternalhit/1.1', 'Twitterbot/1.0', 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'].forEach((ua, i) => {
+    jobs.push(tryFetch('og' + i, diag, url, { ua }).then(r => {
+      if (!r || !r.ok) return;
+      cands.push(cleanIgDesc(meta(r.text, ['og:description', 'description'])));
+      cands.push(cleanIgDesc(meta(r.text, ['og:title'])));
+      const j = jsonStr(r.text, /"caption"/);
+      if (j) cands.push(j);
+      image = image || meta(r.text, ['og:image']);
+    }));
+  });
+  await Promise.all(jobs);
+  const text = cands.filter(Boolean).sort((a, b) => b.length - a.length)[0] || '';
+  return { text, image, title: '' };
+}
+
+async function tiktokSource(url, diag) {
+  const cands = []; let image = '';
+  await Promise.all([
+    tryFetch('oembed', diag, 'https://www.tiktok.com/oembed?url=' + encodeURIComponent(url), { accept: 'application/json' }).then(r => {
+      if (!r || !r.ok) return;
+      try { const d = JSON.parse(r.text); cands.push(d.title || ''); image = image || d.thumbnail_url || ''; } catch (e) {}
+    }),
+    tryFetch('page', diag, url).then(r => {
+      if (!r || !r.ok) return;
+      cands.push(jsonStr(r.text, /"desc"/));
+      cands.push(meta(r.text, ['og:description', 'description']));
+      image = image || meta(r.text, ['og:image']);
+    })
+  ]);
+  const text = cands.filter(Boolean).sort((a, b) => b.length - a.length)[0] || '';
+  return { text, image, title: '' };
 }
 
 async function youtubeSource(url) {
@@ -214,13 +238,18 @@ module.exports = handle(async (req, res) => {
 
   // 1) Social platforms: caption/description -> AI
   if (/(^|\.)instagram\.com$|^instagr\.am$/.test(h) || /tiktok\.com$/.test(h) || /youtube\.com$|^youtu\.be$/.test(h)) {
-    const src = /instagram|instagr/.test(h) ? await igSource(url) : /tiktok/.test(h) ? await tiktokSource(url) : await youtubeSource(url);
+    const diag = [];
+    const src = /instagram|instagr/.test(h) ? await igSource(url, diag) : /tiktok/.test(h) ? await tiktokSource(url, diag) : await youtubeSource(url);
     const text = (src.text || '').trim();
+    console.log('social import', h, diag.join(' '), 'chars=' + text.length);
     if (text.length < 40) {
-      throw httpError(422, "That post didn't share its caption with us (private, or the app hides it). Copy the caption text and paste it in the box below, and I'll take it from there.");
+      throw httpError(422, "We couldn't read that post's caption (" + h + " often blocks servers, even for public posts). Long-press the caption, tap Copy, and paste it in the box below.");
     }
     const draft = await aiExtract(focusText(text), h, !!b.cocktail);
-    if (!draft) throw httpError(422, "I read the post but it doesn't include a full recipe (often it's only in the video). If the full recipe is in the comments or on their website, paste that instead.");
+    if (!draft) {
+      const seen = text.replace(/\s+/g, ' ').slice(0, 90);
+      throw httpError(422, "We only got " + text.length + " characters of that post: \"" + seen + (text.length > 90 ? '…' : '') + "\". If the full recipe is longer than that, copy the caption (or the comments) and paste it in the box below.");
+    }
     return send(res, 200, { ok: true, source: 'ai-social', draft, image: src.image || '' });
   }
 
