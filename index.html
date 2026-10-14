@@ -259,6 +259,7 @@ input[type=checkbox]{-webkit-appearance:checkbox;appearance:checkbox;}
   flex-direction:column;
   cursor:pointer;
   overflow:hidden;
+  position:relative;
   transition:transform .12s,border-color .12s;
   -webkit-user-select:none;user-select:none;
 }
@@ -512,6 +513,8 @@ input[type=checkbox]{-webkit-appearance:checkbox;appearance:checkbox;}
 .receipt-actions{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;justify-content:center;}
 
 /* ---- Recipe card image ---- */
+.pcredit{position:absolute;top:8px;left:8px;max-width:calc(100% - 16px);font-size:10px;line-height:1.35;background:rgba(0,0,0,.62);color:#fff;padding:3px 7px;border-radius:6px;}
+.pcredit a{color:#fff;text-decoration:underline;}
 .rcard-img{width:100%;height:150px;object-fit:cover;display:block;border-radius:var(--radius) var(--radius) 0 0;}
 
 /* ---- Cook Mode — full-screen kitchen view ---- */
@@ -3211,6 +3214,12 @@ function recipeImg(r){
   var p = r && state.photoCache[r.id];
   return (p && p.url) || recipeCover(r||{});
 }
+function cardCredit(r){
+  var p = r && !r.image && state.photoCache[r.id];
+  if (!p || !p.credit) return "";
+  var lk = 'target="_blank" rel="noopener" onclick="event.stopPropagation()"';
+  return '<div class="pcredit">Photo by <a href="'+escapeHtml(p.link||"#")+'" '+lk+'>'+escapeHtml(p.credit)+'</a> on <a href="'+escapeHtml(p.sourceUrl||"https://www.pexels.com")+'" '+lk+'>'+escapeHtml(p.source||"Pexels")+'</a></div>';
+}
 function photoCredit(r){
   var p = r && !r.image && state.photoCache[r.id];
   if (!p || !p.credit) return "";
@@ -3641,7 +3650,7 @@ function renderCommunityTab(){
     var authorName = mine ? "You" : (r.ownerName || "Someone");
     var following = !mine && isFollowing(r.ownerId);
     html += '<div class="rcard" onclick="openRecipe(\''+r.id+'\')">'+
-      '<img class="rcard-img" src="'+escapeHtml(recipeImg(r))+'" alt="" loading="lazy">'+
+      '<img class="rcard-img" src="'+escapeHtml(recipeImg(r))+'" alt="" loading="lazy">'+cardCredit(r)+
       '<div class="rcard-top"><div class="rcard-top-inner">'+
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">'+
       '<h3 style="flex:1;">'+escapeHtml(r.name)+'</h3>'+
@@ -3933,7 +3942,7 @@ function renderCocktailsTab(){
     var shareDoc = shareDocsByStarter[r.id];
     var isPublicSomehow = !!r.isPublic || !!(shareDoc && shareDoc.isPublic);
     html += '<div class="rcard" onclick="openRecipe(\''+r.id+'\')">'+
-      '<img class="rcard-img" src="'+escapeHtml(recipeImg(r))+'" alt="" loading="lazy">'+
+      '<img class="rcard-img" src="'+escapeHtml(recipeImg(r))+'" alt="" loading="lazy">'+cardCredit(r)+
       '<div class="rcard-top"><div class="rcard-top-inner">'+
       '<h3>'+escapeHtml(r.name)+'</h3>'+
       '<div class="rcard-meta">'+escapeHtml(r.time||"")+' &middot; serves '+(r.servings||1)+'</div></div></div>'+
@@ -3997,7 +4006,7 @@ function renderRecipeListArea(){
     var shareDoc = shareDocId ? state.myRecipes.filter(function(x){return x.id===shareDocId;})[0] : null;
     var isPublicSomehow = !!r.isPublic || !!(shareDoc && shareDoc.isPublic);
     html += '<div class="rcard" onclick="openRecipe(\''+r.id+'\')">'+
-      '<img class="rcard-img" src="'+escapeHtml(recipeImg(r))+'" alt="" loading="lazy">'+
+      '<img class="rcard-img" src="'+escapeHtml(recipeImg(r))+'" alt="" loading="lazy">'+cardCredit(r)+
       '<div class="rcard-top"><div class="rcard-top-inner"><h3>'+escapeHtml(r.name)+'</h3>'+
       '<div class="rcard-meta">'+escapeHtml(r.time||"")+' &middot; serves '+(r.servings||4)+'</div></div></div>'+
       '<div class="tagrow">'+
