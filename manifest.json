@@ -23,8 +23,9 @@
     }
   ],
   "share_target": {
-    "action": "https://cookmise.app/",
-    "method": "GET",
+    "action": "https://cookmise.app/api/share",
+    "method": "POST",
+    "enctype": "application/x-www-form-urlencoded",
     "params": {
       "title": "shared_title",
       "text": "shared_text",
