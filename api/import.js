@@ -108,6 +108,7 @@ async function igSource(url, diag) {
   const m = url.match(/instagram\.com\/(?:[^/]+\/)?(p|reel|reels|tv)\/([A-Za-z0-9_-]+)/i);
   const cands = []; let image = '';
   const jobs = [];
+  let early; const earlyP = new Promise(r => { early = r; });   // full caption from the embed route: don't wait for the slower fallbacks
   if (m) {
     const kind = m[1] === 'reels' ? 'reel' : m[1];
     jobs.push(tryFetch('embed', diag, 'https://www.instagram.com/' + kind + '/' + m[2] + '/embed/captioned/').then(r => {
@@ -118,6 +119,7 @@ async function igSource(url, diag) {
       if (j) cands.push(j);
       const im = r.text.match(/class="EmbeddedMediaImage"[^>]*src="([^"]+)"/i);
       if (im) image = image || decodeEntities(im[1]);
+      if (cands.some(c => c && c.length >= 120)) early();
     }));
   }
   ['facebookexternalhit/1.1', 'Twitterbot/1.0', 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'].forEach((ua, i) => {
@@ -130,7 +132,7 @@ async function igSource(url, diag) {
       image = image || meta(r.text, ['og:image']);
     }));
   });
-  await Promise.all(jobs);
+  await Promise.race([Promise.all(jobs), earlyP]);
   const text = cands.filter(Boolean).sort((a, b) => b.length - a.length)[0] || '';
   return { text, image, title: '' };
 }
@@ -202,6 +204,17 @@ function normalizeDraft(d, forceDrink) {
     ingredients: ings, steps
   };
 }
+// Fetch the post photo while the AI reads the caption, so the app doesn't need a second round trip.
+// Never throws; '' means "let the app try /api/img itself". shortcut: 1.5MB cap keeps the JSON under Vercel's 4.5MB response limit.
+async function inlineImage(url) {
+  if (!/^https?:\/\//i.test(url || '')) return '';
+  try {
+    const r = await safeFetch(url, { maxBytes: 1500000, timeoutMs: 6000, accept: 'image/avif,image/webp,image/png,image/jpeg,*/*;q=0.8' });
+    const type = (r.type || '').split(';')[0].trim().toLowerCase();
+    if (!r.ok || !/^image\/(jpeg|png|webp|gif)$/.test(type) || r.buf.length >= 1500000) return '';
+    return 'data:' + type + ';base64,' + r.buf.toString('base64');
+  } catch (e) { return ''; }
+}
 async function aiExtract(text, hint, cocktail) {
   const raw = await claude({
     tier: 'fast', maxTokens: 2500,
@@ -245,12 +258,13 @@ module.exports = handle(async (req, res) => {
     if (text.length < 40) {
       throw httpError(422, "We couldn't read that post's caption (" + h + " often blocks servers, even for public posts). Long-press the caption, tap Copy, and paste it in the box below.");
     }
+    const imgP = inlineImage(src.image);
     const draft = await aiExtract(focusText(text), h, !!b.cocktail);
     if (!draft) {
       const seen = text.replace(/\s+/g, ' ').slice(0, 90);
       throw httpError(422, "We only got " + text.length + " characters of that post: \"" + seen + (text.length > 90 ? '…' : '') + "\". If the full recipe is longer than that, copy the caption (or the comments) and paste it in the box below.");
     }
-    return send(res, 200, { ok: true, source: 'ai-social', draft, image: src.image || '' });
+    return send(res, 200, { ok: true, source: 'ai-social', draft, image: src.image || '', imageData: await imgP });
   }
 
   // 2) Any web page
