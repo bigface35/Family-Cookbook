@@ -495,6 +495,10 @@ svg.ic.fill{fill:currentColor;}
 @media (prefers-reduced-motion:reduce){
   *{transition:none !important;animation:none !important;}
 }
+#share-splash{position:fixed;inset:0;z-index:9999;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:24px;}
+#share-splash .ss-card{width:100%;max-width:320px;text-align:center;}
+#share-splash .ss-title{font-size:22px;font-weight:600;color:var(--amber);letter-spacing:-.01em;}
+#share-splash .ss-msg{font-size:14px;color:var(--text-soft);margin-top:10px;min-height:18px;}
 </style>
 </head>
 <body>
@@ -1436,6 +1440,7 @@ function loadState(){
   auth.onAuthStateChanged(function(user){
     clearListeners();
     if (!user){
+      shareSplash(null);   // signed out: show the sign-in screen (the shared link waits)
       state.currentUser = null; state.showTour = false; state.privateLoaded = false;
       render();
       return;
@@ -2459,6 +2464,20 @@ function dismissMigrationBanner(){ state.showMigrationBanner = false; render(); 
 // Runs immediately on load, before auth — stores URL for processing after sign-in.
 var launchInfo = window.location.search ? window.location.search.slice(0,300) : "(no link attached)";
 try{ launchInfo = decodeURIComponent(launchInfo.replace(/\+/g," ")); }catch(e){}
+// Instant feedback while a shared link is being imported (covers sign-in restore, the fetch and the AI read).
+function shareSplash(msg){
+  var el = document.getElementById("share-splash");
+  if (msg === null){ if (el) el.remove(); return; }
+  if (!el){
+    el = document.createElement("div");
+    el.id = "share-splash";
+    el.innerHTML = '<div class="ss-card"><div class="ss-title">Importing recipe…</div><div class="progress-bar"><div class="progress-bar-fill"></div></div><div class="ss-msg" id="share-splash-msg"></div></div>';
+    document.body.appendChild(el);
+    setTimeout(function(){ shareSplash(null); }, 45000);   // never trap the user behind it
+  }
+  var m = document.getElementById("share-splash-msg");
+  if (m && msg) m.textContent = msg;
+}
 function checkShareTarget(){
   var params = new URLSearchParams(window.location.search);
   var sharedUrl  = params.get("shared_url")  || "";
@@ -2476,6 +2495,7 @@ function checkShareTarget(){
     state.pendingSharedImportText = textOnly;   // a caption shared without a link
   }
   if (found || textOnly.length > 60){
+    shareSplash("Opening your cookbook…");
     try{
       var clean = new URL(window.location.href);
       ["shared_url","shared_text","shared_title"].forEach(function(k){ clean.searchParams.delete(k); });
@@ -2497,9 +2517,10 @@ function handlePendingSharedImport(){
     if (url){
       var inp = document.getElementById("import-url-input");
       if (inp){ inp.value = url; handleUrlImport(); }
+      else shareSplash(null);
     } else {
       var ta = document.getElementById("import-text-input");
-      if (ta){ ta.value = txt; handleTextImport(); }
+      if (ta){ ta.value = txt; shareSplash("Reading the recipe…"); handleTextImport(); }
     }
   }, 80);
 }
@@ -2764,6 +2785,7 @@ function markCocktail(draft){
   draft.kidFriendly = false; draft.kidNote = "";
 }
 function startImportDraft(draft, image){
+  shareSplash(null);
   draft.image = image || draft.image || "";
   if (state.importCocktail) markCocktail(draft);
   state.importCocktail = false;
@@ -2781,7 +2803,9 @@ async function handleUrlImport(){
   if (state.importBusy) return;
   state.importBusy = true;
   if (progEl) progEl.style.display = "block";
-  if (statusEl) statusEl.textContent = /instagram|tiktok|youtu/i.test(url) ? "Reading the post…" : "Reading the page…";
+  var reading = /instagram|tiktok|youtu/i.test(url) ? "Reading the post…" : "Reading the page…";
+  if (statusEl) statusEl.textContent = reading;
+  shareSplash(reading);
   try{
     var d = await apiPost("/api/import", {url:url, cocktail:!!state.importCocktail});
     var draft;
@@ -2792,13 +2816,17 @@ async function handleUrlImport(){
       draft = d.draft;
     }
     if (statusEl && (d.image || draft.image)) statusEl.textContent = "Saving the photo…";
+    shareSplash("Almost done…");
     var rawImg = d.image || draft.image || "";
-    var savedImg = await localizeImage(rawImg);
+    var savedImg = "";
+    if (d.imageData){ try{ savedImg = await downscaleDataUrl(d.imageData, 800, 0.8); }catch(e){} }   // server already fetched it
+    if (!savedImg) savedImg = await localizeImage(rawImg);
     if (!savedImg && d.source==="jsonld") savedImg = rawImg;   // recipe-site photos are stable; social thumbnails expire
     state.importBusy = false;
     startImportDraft(draft, savedImg);
   }catch(e){
     state.importBusy = false;
+    shareSplash(null);
     if (progEl) progEl.style.display = "none";
     if (statusEl) statusEl.textContent = (e && e.message) ? e.message : "Couldn't import that link — try pasting the text below instead.";
     var ta = document.getElementById("import-text-input");   // caption couldn't be read: put the cursor where the paste goes
@@ -2821,6 +2849,7 @@ async function handleTextImport(){
     startImportDraft(d.draft, "");
   }catch(e){
     state.importBusy = false;
+    shareSplash(null);
     if (progEl) progEl.style.display = "none";
     if (statusEl) statusEl.textContent = (e && e.message) ? e.message : "Couldn't read that text.";
   }
